@@ -49,6 +49,16 @@ getNoRippleFlag(
     return false;  // silence warning
 }
 
+// Helper function that returns the owner count on an account.
+std::uint32_t
+ownerCount(test::jtx::Env const& env, test::jtx::Account const& account)
+{
+    std::uint32_t ret{0};
+    if (auto const sleAccountt = env.le(account))
+        ret = sleAccount->at(sfOwnerCount);
+    return ret;
+}
+
 struct Flow_test : public beast::unit_test::suite
 {
     void
@@ -1371,10 +1381,217 @@ struct Flow_test : public beast::unit_test::suite
     }
 
     void
+    testSelfPaymentMakesTrustline(FeatureBitset features)
+    {
+        testcase("SelfPaymentMakesTrustline");
+
+        using namespace jtx;
+
+        auto const alice = Account("alice");
+        auto const bob = Account("bob");
+        auto const gw = Account("gw");
+
+        auto const USD = gw["USD"];
+        auto const EUR = gw["EUR"];
+
+        {
+            // XRP -> IOU
+            Env env(*this, features);
+            auto const selfPaymentMakesTrustline =
+                features[featureSelfPaymentMakesTrustline];
+
+            env.fund(XRP(10000), alice, gw);
+
+            env(offer(gw, XRP(1000), USD(1000)));
+            env.close();
+
+            TER const expectedTER = selfPaymentMakesTrustline
+                ? static_cast<TER>(tesSUCCESS)
+                : static_cast<TER>(tecPATH_DRY);
+
+            // payment without trustline
+            env(pay(alice, alice, USD(10)), sendmax(XRP(10)), ter(expectedTER));
+            env.close();
+            auto const expectedOwnerCount = selfPaymentMakesTrustline ? 1 : 0;
+            BEAST_EXPECT(ownerCount(env, alice) == expectedOwnerCount);
+            if (selfPaymentMakesTrustline)
+            {
+                auto jrr = ledgerEntryState(env, alice, gw, "USD");
+                BEAST_EXPECT(
+                    jrr[jss::node][sfBalance.fieldName][jss::value] == "-10");
+                BEAST_EXPECT(
+                    jrr[jss::node][sfHighLimit.fieldName][jss::value] == "0");
+            }
+
+            // payment with trustline (limit over)
+            env(pay(alice, alice, USD(20)), sendmax(XRP(20)), ter(expectedTER));
+            env.close();
+            if (selfPaymentMakesTrustline)
+            {
+                auto jrr = ledgerEntryState(env, alice, gw, "USD");
+                BEAST_EXPECT(
+                    jrr[jss::node][sfBalance.fieldName][jss::value] == "-30");
+                BEAST_EXPECT(
+                    jrr[jss::node][sfHighLimit.fieldName][jss::value] == "0");
+            }
+
+            // payment with trustline (limit not over)
+            env.trust(USD(10000), alice);
+            env(pay(alice, alice, USD(40)), sendmax(XRP(40)));
+            env.close();
+            if (selfPaymentMakesTrustline)
+            {
+                auto jrr = ledgerEntryState(env, alice, gw, "USD");
+                // shoud 30
+                BEAST_EXPECT(
+                    jrr[jss::node][sfBalance.fieldName][jss::value] == "-70");
+                // should 30
+                BEAST_EXPECT(
+                    jrr[jss::node][sfHighLimit.fieldName][jss::value] ==
+                    "10000");
+            }
+        }
+
+        {
+            // IOU -> IOU
+            Env env(*this, features);
+
+            env.fund(XRP(10000), alice, gw);
+
+            env.trust(EUR(10000), alice);
+            env(pay(gw, alice, EUR(100)));
+
+            env(offer(gw, EUR(100), USD(100)));
+            env.close();
+
+            BEAST_EXPECT(ownerCount(env, alice) == 1);
+
+            TER const expectedTER = features[featureSelfPaymentMakesTrustline]
+                ? static_cast<TER>(tesSUCCESS)
+                : static_cast<TER>(tecPATH_DRY);
+
+            // payment without trustline
+            env(pay(alice, alice, USD(10)), sendmax(EUR(10)), ter(expectedTER));
+            env.close();
+            auto const expectedOwnerCount =
+                features[featureSelfPaymentMakesTrustline] ? 2 : 1;
+            BEAST_EXPECT(ownerCount(env, alice) == expectedOwnerCount);
+        }
+
+        {
+            // Inssufficient reserve
+            Env env(*this, features);
+
+            auto const fee = env.current()->fees().base;
+            env.fund(XRP(10000), gw);
+            env.fund(reserve(env, 0) + fee * 1, alice);
+
+            env(offer(gw, XRP(100), USD(100)));
+            env.close();
+
+            TER const expectedTER = features[featureSelfPaymentMakesTrustline]
+                ? static_cast<TER>(tecNO_LINE_INSUF_RESERVE)
+                : static_cast<TER>(tecPATH_DRY);
+            env(pay(alice, alice, USD(100)),
+                sendmax(XRP(100)),
+                ter(expectedTER));
+            env.close();
+        }
+
+        {
+            // trustline to self doesn't allowed
+            Env env(*this, features);
+
+            env.fund(XRP(10000), gw);
+
+            env(pay(gw, gw, USD(100)), sendmax(XRP(100)), ter(tecPATH_PARTIAL));
+            env.close();
+        }
+
+        {
+            // RequireAuth trustline to self doesn't allowed
+            Env env(*this, features);
+
+            env.fund(XRP(10000), gw, alice);
+
+            env(fset(gw, asfRequireAuth));
+            env.close();
+
+            env(offer(gw, XRP(100), USD(100)));
+
+            env(pay(alice, alice, USD(10)), sendmax(XRP(10)), ter(tecPATH_DRY));
+            env.close();
+        }
+
+        {
+            // Payment to other does't make trustline
+            Env env(*this, features);
+
+            env.fund(XRP(10000), gw, alice, bob);
+
+            env.trust(USD(10000), alice);
+            env(pay(gw, alice, USD(100)));
+
+            env(pay(alice, bob, USD(100)), ter(tecPATH_DRY));
+            env.close();
+        }
+
+        {
+            // Patial payment
+            // XRP -> IOU
+            Env env(*this, features);
+            auto const selfPaymentMakesTrustline =
+                features[featureSelfPaymentMakesTrustline];
+
+            env.fund(XRP(10000), alice, gw);
+
+            env(offer(gw, XRP(100), USD(100)));
+            env.close();
+
+            TER const expectedTER = selfPaymentMakesTrustline
+                ? static_cast<TER>(tesSUCCESS)
+                : static_cast<TER>(tecPATH_DRY);
+
+            // payment without trustline
+            env(pay(alice, alice, USD(10)),
+                sendmax(XRP(5)),
+                txflags(tfPartialPayment),
+                ter(expectedTER));
+            env.close();
+            auto const expectedOwnerCount = selfPaymentMakesTrustline ? 1 : 0;
+            BEAST_EXPECT(ownerCount(env, alice) == expectedOwnerCount);
+            if (selfPaymentMakesTrustline)
+            {
+                auto jrr = ledgerEntryState(env, alice, gw, "USD");
+                BEAST_EXPECT(
+                    jrr[jss::node][sfBalance.fieldName][jss::value] == "-5");
+                BEAST_EXPECT(
+                    jrr[jss::node][sfHighLimit.fieldName][jss::value] == "0");
+            }
+
+            // payment with trustline
+            env(pay(alice, alice, USD(10)),
+                sendmax(XRP(1)),
+                txflags(tfPartialPayment),
+                ter(expectedTER));
+            if (selfPaymentMakesTrustline)
+            {
+                auto jrr = ledgerEntryState(env, alice, gw, "USD");
+                BEAST_EXPECT(
+                    jrr[jss::node][sfBalance.fieldName][jss::value] == "-6");
+                BEAST_EXPECT(
+                    jrr[jss::node][sfHighLimit.fieldName][jss::value] == "0");
+            }
+        }
+    }
+
+    void
     testWithFeats(FeatureBitset features)
     {
         using namespace jtx;
         FeatureBitset const ownerPaysFee{featureOwnerPaysFee};
+        FeatureBitset const selfPaymentMakesTrustline{
+            featureSelfPaymentMakesTrustline};
 
         testLineQuality(features);
         testFalseDry(features);
@@ -1391,6 +1608,8 @@ struct Flow_test : public beast::unit_test::suite
         testReexecuteDirectStep(features);
         testSelfPayLowQualityOffer(features);
         testTicketPay(features);
+        testSelfPaymentMakesTrustline(features - selfPaymentMakesTrustline);
+        testSelfPaymentMakesTrustline(features);
     }
 
     void

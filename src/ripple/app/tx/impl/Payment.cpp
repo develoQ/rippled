@@ -17,9 +17,11 @@
 */
 //==============================================================================
 
+#include <ripple/app/ledger/Ledger.h>
 #include <ripple/app/paths/RippleCalc.h>
 #include <ripple/app/tx/impl/Payment.h>
 #include <ripple/basics/Log.h>
+#include <ripple/basics/scope.h>
 #include <ripple/core/Config.h>
 #include <ripple/protocol/Feature.h>
 #include <ripple/protocol/TxFlags.h>
@@ -290,6 +292,7 @@ Payment::preclaim(PreclaimContext const& ctx)
 TER
 Payment::doApply()
 {
+    auto viewJ = ctx_.app.journal("View");
     auto const deliverMin = ctx_.tx[~sfDeliverMin];
 
     // Ripple if source or destination is non-native or if there are paths.
@@ -374,6 +377,109 @@ Payment::doApply()
             }
         }
 
+        PaymentSandbox pv(&view());
+
+        bool const selfPaymentMakesTrustline =
+            view().rules().enabled(featureSelfPaymentMakesTrustline);
+        bool isSelfPayment = false;
+
+        AccountID const issuer = saDstAmount.getIssuer();
+        Issue const& trustLineIssue = saDstAmount.issue();
+        bool const accountLow = issuer > account_;
+        Keylet const trustLineKey = keylet::line(account_, trustLineIssue);
+
+        if (selfPaymentMakesTrustline && !saDstAmount.native() &&
+            account_ == uDstAccountID && account_ != saDstAmount.getIssuer())
+        {
+            // If the destination account is the source account and account does
+            // not have a trustline to amount's issuer, then create a trust
+            // line.
+
+            isSelfPayment = true;
+
+            if (!pv.exists(trustLineKey))
+            {
+                JLOG(j_.debug()) << "Will create new trustline: "
+                                 << ctx_.tx.getTransactionID();
+                // 1. Can the self payment account meet the reserve for the
+                // trust line?
+                // 2. Create trust line between this account
+                //    and the issuer.
+                // 3. Apply correct noRipple settings on trust line.  Use...
+                //     a. this (destination) account and
+                //     b. issuing account (not sending account).
+
+                auto const sleAcc = pv.peek(keylet::account(account_));
+
+                // Can the account cover the trust line's reserve?
+                if (std::uint32_t const ownerCount = {sleAcc->at(sfOwnerCount)};
+                    mPriorBalance <
+                    view().fees().accountReserve(ownerCount + 1))
+                {
+                    return tecNO_LINE_INSUF_RESERVE;
+                }
+
+                Currency const currency = saDstAmount.getCurrency();
+                STAmount initialBalance(saDstAmount.issue());
+                initialBalance.setIssuer(noAccount());
+
+                STAmount limitAmount(saDstAmount);
+                limitAmount.setIssuer(account_);
+
+                // clang-format off
+                if (TER const ter = trustCreate(
+                        pv,                             // payment sandbox
+                        accountLow,                     // is dest low?
+                        issuer,                         // source
+                        account_,                       // destination
+                        trustLineKey.key,               // ledger index
+                        sleAcc,                         // Account to add to
+                        false,                          // authorize account
+                        (sleAcc->getFlags() & lsfDefaultRipple) == 0,
+                        false,                          // freeze trust line
+                        initialBalance,                 // zero initial balance
+                        Issue(currency, account_),      // limit of zero
+                        0,                              // quality in
+                        0,                              // quality out
+                        viewJ);                         // journal
+                    !isTesSuccess(ter))
+                {
+                    return ter;
+                }
+                // clang-format on
+                pv.update(sleAcc);
+
+                // Note that we _don't_ need to be careful about destroying
+                // the trust line if the self payment fails.  The transaction
+                // machinery will automatically clean it up.
+            }
+        }
+
+        SF_AMOUNT const& tweakedLimit = accountLow ? sfLowLimit : sfHighLimit;
+        STAmount savedLimit = Issue(saDstAmount.getCurrency(), account_);
+        auto const sleTrustLine = pv.peek(trustLineKey);
+
+        // Set the trust line limit to the highest possible value
+        // while flow runs.
+        if (isSelfPayment)
+        {
+            if (!sleTrustLine)
+                return tecINTERNAL;
+
+            savedLimit = sleTrustLine->at(tweakedLimit);
+            STAmount const bigAmount(
+                trustLineIssue, STAmount::cMaxValue, STAmount::cMaxOffset);
+            sleTrustLine->at(tweakedLimit) = bigAmount;
+        }
+
+        // Make sure the tweaked limits are restored when we leave scope.
+        scope_exit fixup(
+            [&pv, &trustLineKey, &tweakedLimit, &savedLimit, isSelfPayment]() {
+                if (auto const sleTrustLine = pv.peek(trustLineKey);
+                    isSelfPayment)
+                    sleTrustLine->at(tweakedLimit) = savedLimit;
+            });
+
         path::RippleCalc::Input rcInput;
         rcInput.partialPaymentAllowed = partialPaymentAllowed;
         rcInput.defaultPathsAllowed = defaultPathsAllowed;
@@ -382,7 +488,6 @@ Payment::doApply()
 
         path::RippleCalc::Output rc;
         {
-            PaymentSandbox pv(&view());
             JLOG(j_.debug()) << "Entering RippleCalc in payment: "
                              << ctx_.tx.getTransactionID();
             rc = path::RippleCalc::rippleCalculate(
