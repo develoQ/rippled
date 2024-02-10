@@ -49,18 +49,18 @@ getNoRippleFlag(
     return false;  // silence warning
 }
 
-// Helper function that returns the owner count on an account.
-std::uint32_t
-ownerCount(test::jtx::Env const& env, test::jtx::Account const& account)
-{
-    std::uint32_t ret{0};
-    if (auto const sleAccountt = env.le(account))
-        ret = sleAccount->at(sfOwnerCount);
-    return ret;
-}
-
 struct Flow_test : public beast::unit_test::suite
 {
+    // Helper function that returns the owner count on an account.
+    std::uint32_t
+    ownerCount(test::jtx::Env const& env, test::jtx::Account const& account)
+    {
+        std::uint32_t ret{0};
+        if (auto const sleAccount = env.le(account))
+            ret = sleAccount->at(sfOwnerCount);
+        return ret;
+    }
+
     void
     testDirectStep(FeatureBitset features)
     {
@@ -940,8 +940,16 @@ struct Flow_test : public beast::unit_test::suite
         {
             auto const offer = *offerPtr;
             BEAST_EXPECT(offer[sfLedgerEntryType] == ltOFFER);
-            BEAST_EXPECT(offer[sfTakerGets] == EUR(594));
-            BEAST_EXPECT(offer[sfTakerPays] == USD(495));
+            if (features[featureSelfPaymentMakesTrustline])
+            {
+                BEAST_EXPECT(offer[sfTakerGets] == EUR(540));
+                BEAST_EXPECT(offer[sfTakerPays] == USD(450));
+            }
+            else
+            {
+                BEAST_EXPECT(offer[sfTakerGets] == EUR(594));
+                BEAST_EXPECT(offer[sfTakerPays] == USD(495));
+            }
         }
     }
     void
@@ -1413,7 +1421,8 @@ struct Flow_test : public beast::unit_test::suite
             env(pay(alice, alice, USD(10)), sendmax(XRP(10)), ter(expectedTER));
             env.close();
             auto const expectedOwnerCount = selfPaymentMakesTrustline ? 1 : 0;
-            BEAST_EXPECT(ownerCount(env, alice) == expectedOwnerCount);
+            // BEAST_EXPECT(owners(env, alice) == expectedOwnerCount);
+            env.require(owners(alice, expectedOwnerCount));
             if (selfPaymentMakesTrustline)
             {
                 auto jrr = ledgerEntryState(env, alice, gw, "USD");
@@ -1464,7 +1473,8 @@ struct Flow_test : public beast::unit_test::suite
             env(offer(gw, EUR(100), USD(100)));
             env.close();
 
-            BEAST_EXPECT(ownerCount(env, alice) == 1);
+            // BEAST_EXPECT(owners(env, alice) == 1);
+            env.require(owners(alice, 1));
 
             TER const expectedTER = features[featureSelfPaymentMakesTrustline]
                 ? static_cast<TER>(tesSUCCESS)
@@ -1475,7 +1485,8 @@ struct Flow_test : public beast::unit_test::suite
             env.close();
             auto const expectedOwnerCount =
                 features[featureSelfPaymentMakesTrustline] ? 2 : 1;
-            BEAST_EXPECT(ownerCount(env, alice) == expectedOwnerCount);
+            // BEAST_EXPECT(owners(env, alice) == expectedOwnerCount);
+            env.require(owners(alice, expectedOwnerCount));
         }
 
         {
@@ -1559,7 +1570,8 @@ struct Flow_test : public beast::unit_test::suite
                 ter(expectedTER));
             env.close();
             auto const expectedOwnerCount = selfPaymentMakesTrustline ? 1 : 0;
-            BEAST_EXPECT(ownerCount(env, alice) == expectedOwnerCount);
+            // BEAST_EXPECT(owners(env, alice) == expectedOwne..rCount);
+            env.require(owners(alice, expectedOwnerCount));
             if (selfPaymentMakesTrustline)
             {
                 auto jrr = ledgerEntryState(env, alice, gw, "USD");
