@@ -17,6 +17,7 @@
 */
 //==============================================================================
 
+#include <ripple/app/paths/Flow.h>
 #include <ripple/app/tx/impl/NFTokenAcceptOffer.h>
 #include <ripple/app/tx/impl/details/NFTokenUtils.h>
 #include <ripple/ledger/View.h>
@@ -32,6 +33,10 @@ NFTokenAcceptOffer::preflight(PreflightContext const& ctx)
 {
     if (!ctx.rules.enabled(featureNonFungibleTokensV1))
         return temDISABLED;
+
+    if (!ctx.rules.enabled(featureCrossCurrencyNFTokenAccept))
+        if (auto const amount = ctx.tx[~sfAmount])
+            return temMALFORMED;
 
     if (auto const ret = preflight1(ctx); !isTesSuccess(ret))
         return ret;
@@ -104,7 +109,8 @@ NFTokenAcceptOffer::preclaim(PreclaimContext const& ctx)
             return tecNFTOKEN_BUY_SELL_MISMATCH;
 
         // The two offers being brokered must be for the same asset:
-        if ((*bo)[sfAmount].issue() != (*so)[sfAmount].issue())
+        if (!ctx.view.rules().enabled(featureCrossCurrencyNFTokenAccept) &&
+            (*bo)[sfAmount].issue() != (*so)[sfAmount].issue())
             return tecNFTOKEN_BUY_SELL_MISMATCH;
 
         // The two offers may not form a loop.  A broker may not sell the
@@ -115,14 +121,16 @@ NFTokenAcceptOffer::preclaim(PreclaimContext const& ctx)
 
         // Ensure that the buyer is willing to pay at least as much as the
         // seller is requesting:
-        if ((*so)[sfAmount] > (*bo)[sfAmount])
+        if ((*bo)[sfAmount].issue() == (*so)[sfAmount].issue() &&
+            (*so)[sfAmount] > (*bo)[sfAmount])
             return tecINSUFFICIENT_PAYMENT;
 
         // If the buyer specified a destination
         if (auto const dest = bo->at(~sfDestination))
         {
-            // Before this fix the destination could be either the seller or
-            // a broker. After, it must be whoever is submitting the tx.
+            // Before this fix the destination could be either the
+            // seller or a broker. After, it must be whoever is
+            // submitting the tx.
             if (ctx.view.rules().enabled(fixNonFungibleTokensV1_2))
             {
                 if (*dest != ctx.tx[sfAccount])
@@ -152,14 +160,19 @@ NFTokenAcceptOffer::preclaim(PreclaimContext const& ctx)
         // cut, if any).
         if (auto const brokerFee = ctx.tx[~sfNFTokenBrokerFee])
         {
-            if (brokerFee->issue() != (*bo)[sfAmount].issue())
-                return tecNFTOKEN_BUY_SELL_MISMATCH;
+            if (!ctx.view.rules().enabled(featureCrossCurrencyNFTokenAccept))
+                if (brokerFee->issue() != (*bo)[sfAmount].issue())
+                    return tecNFTOKEN_BUY_SELL_MISMATCH;
 
-            if (brokerFee >= (*bo)[sfAmount])
-                return tecINSUFFICIENT_PAYMENT;
+            if (brokerFee->issue() == (*bo)[sfAmount].issue())
+            {
+                if (brokerFee >= (*bo)[sfAmount])
+                    return tecINSUFFICIENT_PAYMENT;
 
-            if ((*so)[sfAmount] > (*bo)[sfAmount] - *brokerFee)
-                return tecINSUFFICIENT_PAYMENT;
+                if ((*so)[sfAmount].issue() == (*bo)[sfAmount].issue())
+                    if ((*so)[sfAmount] > (*bo)[sfAmount] - *brokerFee)
+                        return tecINSUFFICIENT_PAYMENT;
+            }
         }
     }
 
@@ -234,9 +247,9 @@ NFTokenAcceptOffer::preclaim(PreclaimContext const& ctx)
         }
 
         // The account offering to buy must have funds:
-        auto const needed = so->at(sfAmount);
         if (!ctx.view.rules().enabled(fixNonFungibleTokensV1_2))
         {
+            auto const needed = so->at(sfAmount);
             if (accountHolds(
                     ctx.view,
                     ctx.tx[sfAccount],
@@ -260,6 +273,8 @@ NFTokenAcceptOffer::preclaim(PreclaimContext const& ctx)
             // mode, because then we are confirming that the broker can
             // cover what the buyer will pay, which doesn't make sense, causes
             // an unncessary tec, and is also resolved with this amendment.
+            auto const needed = ctx.tx[~sfAmount].value_or(so->at(sfAmount));
+
             if (accountFunds(
                     ctx.view,
                     ctx.tx[sfAccount],
@@ -273,32 +288,83 @@ NFTokenAcceptOffer::preclaim(PreclaimContext const& ctx)
     return tesSUCCESS;
 }
 
-TER
+PayResult
 NFTokenAcceptOffer::pay(
     AccountID const& from,
     AccountID const& to,
-    STAmount const& amount)
+    STAmount const& deliver_amount,
+    std::optional<STAmount> const& send_max)
 {
-    // This should never happen, but it's easy and quick to check.
-    if (amount < beast::zero)
-        return tecINTERNAL;
+    PayResult payResult;
+    payResult.actualAmountIn = deliver_amount;
+    payResult.actualAmountOut = send_max.value_or(deliver_amount);
 
-    auto const result = accountSend(view(), from, to, amount, j_);
+    // This should never happen, but it's easy and quick to check.
+    if (deliver_amount < beast::zero)
+    {
+        payResult.ter = tecINTERNAL;
+        return payResult;
+    }
+
+    PaymentSandbox psb(&view());
+    if (!view().rules().enabled(featureCrossCurrencyNFTokenAccept) ||
+        deliver_amount.issue() == send_max->issue())
+    {
+        auto const result = accountSend(psb, from, to, deliver_amount, j_);
+        payResult.ter = result;
+    }
+    else
+    {
+        auto viewJ = ctx_.app.journal("View");
+        auto const result = flow(
+            psb,
+            deliver_amount,
+            from,
+            to,
+            STPathSet{},
+            true,   // default path
+            false,  // partial payment
+            true,   // owner pays transfer fee
+            OfferCrossing::no,
+            std::nullopt,
+            send_max,
+            viewJ);
+        payResult.ter = result.result();
+        payResult.actualAmountIn = result.actualAmountIn;
+        payResult.actualAmountOut = result.actualAmountOut;
+    }
 
     // After this amendment, if any payment would cause a non-IOU-issuer to
     // have a negative balance, or an IOU-issuer to have a positive balance in
     // their own currency, we know that something went wrong. This was
     // originally found in the context of IOU transfer fees. Since there are
     // several payouts in this tx, just confirm that the end state is OK.
-    if (!view().rules().enabled(fixNonFungibleTokensV1_2))
-        return result;
-    if (result != tesSUCCESS)
-        return result;
-    if (accountFunds(view(), from, amount, fhZERO_IF_FROZEN, j_).signum() < 0)
-        return tecINSUFFICIENT_FUNDS;
-    if (accountFunds(view(), to, amount, fhZERO_IF_FROZEN, j_).signum() < 0)
-        return tecINSUFFICIENT_FUNDS;
-    return tesSUCCESS;
+    if (!psb.rules().enabled(fixNonFungibleTokensV1_2))
+    {
+        return payResult;
+    }
+    if (payResult.ter != tesSUCCESS)
+    {
+        return payResult;
+    }
+    if (accountFunds(
+            psb, from, send_max.value_or(deliver_amount), fhZERO_IF_FROZEN, j_)
+            .signum() < 0)
+    {
+        payResult.ter = tecINSUFFICIENT_FUNDS;
+        return payResult;
+    }
+    if (accountFunds(psb, to, deliver_amount, fhZERO_IF_FROZEN, j_).signum() <
+        0)
+    {
+        payResult.ter = tecINSUFFICIENT_FUNDS;
+        return payResult;
+    }
+    payResult.ter = tesSUCCESS;
+    payResult.actualAmountIn = deliver_amount;
+    payResult.actualAmountOut = deliver_amount;
+    psb.apply(ctx_.rawView());
+    return payResult;
 }
 
 TER
@@ -356,7 +422,9 @@ NFTokenAcceptOffer::transferNFToken(
 }
 
 TER
-NFTokenAcceptOffer::acceptOffer(std::shared_ptr<SLE> const& offer)
+NFTokenAcceptOffer::acceptOffer(
+    std::shared_ptr<SLE> const& offer,
+    std::optional<STAmount> acceptAmount)
 {
     bool const isSell = offer->isFlag(lsfSellNFToken);
     AccountID const owner = (*offer)[sfOwner];
@@ -365,25 +433,35 @@ NFTokenAcceptOffer::acceptOffer(std::shared_ptr<SLE> const& offer)
 
     auto const nftokenID = (*offer)[sfNFTokenID];
 
-    if (auto amount = offer->getFieldAmount(sfAmount); amount != beast::zero)
+    auto const offerAmount = offer->getFieldAmount(sfAmount);
+
+    auto deliverAmount =
+        isSell ? offerAmount : acceptAmount.value_or(offerAmount);
+
+    auto sendMax = isSell ? acceptAmount.value_or(offerAmount) : offerAmount;
+
+    if (deliverAmount != beast::zero && sendMax != beast::zero)
     {
         // Calculate the issuer's cut from this sale, if any:
         if (auto const fee = nft::getTransferFee(nftokenID); fee != 0)
         {
-            auto const cut = multiply(amount, nft::transferFeeAsRate(fee));
+            auto const cut =
+                multiply(deliverAmount, nft::transferFeeAsRate(fee));
 
             if (auto const issuer = nft::getIssuer(nftokenID);
                 cut != beast::zero && seller != issuer && buyer != issuer)
             {
-                if (auto const r = pay(buyer, issuer, cut); !isTesSuccess(r))
-                    return r;
-                amount -= cut;
+                auto const r = pay(buyer, issuer, cut, sendMax);
+                if (!isTesSuccess(r.ter))
+                    return r.ter;
+                sendMax -= r.actualAmountOut;
             }
         }
 
         // Send the remaining funds to the seller of the NFT
-        if (auto const r = pay(buyer, seller, amount); !isTesSuccess(r))
-            return r;
+        if (auto const r = pay(buyer, seller, deliverAmount, sendMax);
+            !isTesSuccess(r.ter))
+            return r.ter;
     }
 
     // Now transfer the NFT:
@@ -426,7 +504,8 @@ NFTokenAcceptOffer::doApply()
         auto const nftokenID = (*so)[sfNFTokenID];
 
         // The amount is what the buyer of the NFT pays:
-        STAmount amount = (*bo)[sfAmount];
+        STAmount buyerAmount = (*bo)[sfAmount];
+        STAmount sellerAmount = (*so)[sfAmount];
 
         // Three different folks may be paid.  The order of operations is
         // important.
@@ -445,45 +524,49 @@ NFTokenAcceptOffer::doApply()
         if (auto const cut = ctx_.tx[~sfNFTokenBrokerFee];
             cut && cut.value() != beast::zero)
         {
-            if (auto const r = pay(buyer, account_, cut.value());
-                !isTesSuccess(r))
-                return r;
+            auto const r = pay(buyer, account_, cut.value(), buyerAmount);
+            if (!isTesSuccess(r.ter))
+                return r.ter;
 
-            amount -= cut.value();
+            buyerAmount -= r.actualAmountOut;
         }
 
         // Calculate the issuer's cut, if any.
         if (auto const fee = nft::getTransferFee(nftokenID);
-            amount != beast::zero && fee != 0)
+            buyerAmount != beast::zero && fee != 0)
         {
-            auto cut = multiply(amount, nft::transferFeeAsRate(fee));
+            auto cut = multiply(buyerAmount, nft::transferFeeAsRate(fee));
 
             if (auto const issuer = nft::getIssuer(nftokenID);
                 seller != issuer && buyer != issuer)
             {
-                if (auto const r = pay(buyer, issuer, cut); !isTesSuccess(r))
-                    return r;
+                auto const r = pay(buyer, issuer, cut, buyerAmount);
+                if (!isTesSuccess(r.ter))
+                    return r.ter;
 
-                amount -= cut;
+                buyerAmount -= r.actualAmountOut;
             }
         }
 
         // And send whatever remains to the seller.
-        if (amount > beast::zero)
+        if (buyerAmount > beast::zero)
         {
-            if (auto const r = pay(buyer, seller, amount); !isTesSuccess(r))
-                return r;
+            if (auto const r = pay(buyer, seller, buyerAmount, sellerAmount);
+                !isTesSuccess(r.ter))
+                return r.ter;
         }
 
         // Now transfer the NFT:
         return transferNFToken(buyer, seller, nftokenID);
     }
 
+    auto const acceptAmount = ctx_.tx[~sfAmount];
+
     if (bo)
-        return acceptOffer(bo);
+        return acceptOffer(bo, acceptAmount);
 
     if (so)
-        return acceptOffer(so);
+        return acceptOffer(so, acceptAmount);
 
     return tecINTERNAL;
 }

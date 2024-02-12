@@ -7113,6 +7113,150 @@ class NFTokenBaseUtil_test : public beast::unit_test::suite
     }
 
     void
+    testCrossCurrencyNFTokenAccept(FeatureBitset features)
+    {
+        if (features[featureCrossCurrencyNFTokenAccept])
+            testcase("testCrossCurrencyNFTokenAccept 1");
+        else
+            testcase("testCrossCurrencyNFTokenAccept 2");
+
+        using namespace test::jtx;
+
+        Account const minter{"minter"};
+        Account const buyer{"buyer"};
+        Account const gw{"gw"};
+
+        auto const USD = gw["USD"];
+        auto const EUR = gw["EUR"];
+        auto const TST = gw["TST"];
+
+        auto const prepareOffer = [&](Env& env,
+                                      Account const& minter,
+                                      Account const& offerer,
+                                      STAmount const& amount,
+                                      bool sell) {
+            uint256 const nftId{
+                token::getNextID(env, minter, 0u, tfTransferable)};
+            env(token::mint(minter), txflags(tfTransferable));
+            env.close();
+            uint256 const offerID =
+                keylet::nftoffer(offerer, env.seq(offerer)).key;
+            if (sell)
+                env(token::createOffer(offerer, nftId, amount),
+                    txflags(tfSellNFToken));
+            else
+                env(token::createOffer(offerer, nftId, amount),
+                    token::owner(minter));
+            env.close();
+            return offerID;
+        };
+
+        auto const prepareBuyOffer = [&](Env& env,
+                                         Account const& minter,
+                                         Account const& buyer,
+                                         STAmount const& amount) {
+            return prepareOffer(env, minter, buyer, amount, false);
+        };
+        auto const prepareSellOffer = [&](Env& env,
+                                          Account const& minter,
+                                          Account const& seller,
+                                          STAmount const& amount) {
+            return prepareOffer(env, minter, seller, amount, true);
+        };
+
+        {
+            // Accept buy offer
+            Env env{*this, features};
+            env.fund(XRP(10000), minter, buyer, gw);
+            env(fset(gw, asfDefaultRipple));
+
+            env.trust(USD(1000), minter);
+            env.trust(EUR(1000), buyer);
+            env.close();
+
+            env(pay(gw, buyer, EUR(100)));
+            env.close();
+
+            env(offer(gw, EUR(100), USD(100)));
+            env.close();
+
+            auto const offerID =
+                prepareSellOffer(env, minter, minter, USD(100));
+            env.close();
+
+            // Non-existent token pair
+            TER expectedTer = features[featureCrossCurrencyNFTokenAccept]
+                ? TER{tecINSUFFICIENT_FUNDS}
+                : TER{temMALFORMED};
+            env(token::acceptSellOffer(buyer, offerID),
+                token::amount(TST(100)),
+                ter(expectedTer));
+            env.close();
+
+            expectedTer = features[featureCrossCurrencyNFTokenAccept]
+                ? TER{tesSUCCESS}
+                : TER{temMALFORMED};
+            BEAST_EXPECT(ownerCount(env, gw) == 1);
+            env(token::acceptSellOffer(buyer, offerID),
+                token::amount(EUR(100)),
+                ter(expectedTer));
+            env.close();
+            BEAST_EXPECT(ownerCount(env, gw) == 0);
+        }
+
+        {
+            // Accept sell offer
+            Env env{*this, features};
+            env.fund(XRP(10000), minter, buyer, gw);
+            env(fset(gw, asfDefaultRipple));
+
+            env.trust(USD(1000), minter);
+            env.trust(EUR(1000), buyer);
+            env.close();
+
+            env(pay(gw, buyer, EUR(100)));
+            env.close();
+
+            env(offer(gw, EUR(100), USD(100)));
+            env.close();
+
+            auto const offerID = prepareBuyOffer(env, minter, buyer, EUR(100));
+            env.close();
+
+            // Non-existent token pair
+            TER expectedTer = features[featureCrossCurrencyNFTokenAccept]
+                ? TER{terNO_LINE}
+                : TER{temMALFORMED};
+            env(token::acceptBuyOffer(minter, offerID),
+                token::amount(TST(100)),
+                ter(expectedTer));
+            env.close();
+
+            expectedTer = features[featureCrossCurrencyNFTokenAccept]
+                ? TER{tesSUCCESS}
+                : TER{temMALFORMED};
+            BEAST_EXPECT(ownerCount(env, gw) == 1);
+            env(token::acceptBuyOffer(minter, offerID),
+                token::amount(USD(100)),
+                ter(expectedTer));
+            env.close();
+            BEAST_EXPECT(ownerCount(env, gw) == 0);
+        }
+
+        {
+            // NFToken TransferFee
+        }
+
+        {
+            // BrokerFee
+        }
+
+        {
+            // Token TransferFee
+        }
+    }
+
+    void
     testWithFeats(FeatureBitset features)
     {
         testEnabled(features);
@@ -7146,6 +7290,7 @@ class NFTokenBaseUtil_test : public beast::unit_test::suite
         testFixNFTokenRemint(features);
         testTxJsonMetaFields(features);
         testFixNFTokenBuyerReserve(features);
+        testCrossCurrencyNFTokenAccept(features);
     }
 
 public:
@@ -7156,15 +7301,18 @@ public:
         static FeatureBitset const all{supported_amendments()};
         static FeatureBitset const fixNFTDir{fixNFTokenDirV1};
 
-        static std::array<FeatureBitset, 6> const feats{
+        static std::array<FeatureBitset, 7> const feats{
             all - fixNFTDir - fixNonFungibleTokensV1_2 - fixNFTokenRemint -
-                fixNFTokenReserve,
+                fixNFTokenReserve - featureCrossCurrencyNFTokenAccept,
             all - disallowIncoming - fixNonFungibleTokensV1_2 -
-                fixNFTokenRemint - fixNFTokenReserve,
+                fixNFTokenRemint - fixNFTokenReserve -
+                featureCrossCurrencyNFTokenAccept,
             all - fixNonFungibleTokensV1_2 - fixNFTokenRemint -
-                fixNFTokenReserve,
-            all - fixNFTokenRemint - fixNFTokenReserve,
-            all - fixNFTokenReserve,
+                fixNFTokenReserve - featureCrossCurrencyNFTokenAccept,
+            all - fixNFTokenRemint - fixNFTokenReserve -
+                featureCrossCurrencyNFTokenAccept,
+            all - fixNFTokenReserve - featureCrossCurrencyNFTokenAccept,
+            all - featureCrossCurrencyNFTokenAccept,
             all};
 
         if (BEAST_EXPECT(instance < feats.size()))
@@ -7217,12 +7365,21 @@ class NFTokenWOTokenReserve_test : public NFTokenBaseUtil_test
     }
 };
 
+class NFTokenWOCrossCurrency_test : public NFTokenBaseUtil_test
+{
+    void
+    run() override
+    {
+        NFTokenBaseUtil_test::run(5);
+    }
+};
+
 class NFTokenAllFeatures_test : public NFTokenBaseUtil_test
 {
     void
     run() override
     {
-        NFTokenBaseUtil_test::run(5, true);
+        NFTokenBaseUtil_test::run(6, true);
     }
 };
 
@@ -7231,6 +7388,7 @@ BEAST_DEFINE_TESTSUITE_PRIO(NFTokenDisallowIncoming, tx, ripple, 2);
 BEAST_DEFINE_TESTSUITE_PRIO(NFTokenWOfixV1, tx, ripple, 2);
 BEAST_DEFINE_TESTSUITE_PRIO(NFTokenWOTokenRemint, tx, ripple, 2);
 BEAST_DEFINE_TESTSUITE_PRIO(NFTokenWOTokenReserve, tx, ripple, 2);
+BEAST_DEFINE_TESTSUITE_PRIO(NFTokenWOCrossCurrency, tx, ripple, 2);
 BEAST_DEFINE_TESTSUITE_PRIO(NFTokenAllFeatures, tx, ripple, 2);
 
 }  // namespace ripple

@@ -24,14 +24,29 @@
 
 namespace ripple {
 
+struct PayResult
+{
+    /// TER for transfering the payment funds
+    TER ter;
+    // The computed input amount.
+    STAmount actualAmountIn;
+    // The computed output amount.
+    STAmount actualAmountOut;
+};
+
 class NFTokenAcceptOffer : public Transactor
 {
 private:
-    TER
-    pay(AccountID const& from, AccountID const& to, STAmount const& amount);
+    PayResult
+    pay(AccountID const& from,
+        AccountID const& to,
+        STAmount const& deliver_amount,
+        std::optional<STAmount> const& send_max);
 
     TER
-    acceptOffer(std::shared_ptr<SLE> const& offer);
+    acceptOffer(
+        std::shared_ptr<SLE> const& offer,
+        std::optional<STAmount> acceptAmount);
 
     TER
     bridgeOffers(
