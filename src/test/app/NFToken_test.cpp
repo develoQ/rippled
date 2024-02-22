@@ -7420,6 +7420,106 @@ class NFTokenBaseUtil_test : public beast::unit_test::suite
 
         {
             // BrokerFee
+            auto prepare = [&](Env& env) {
+                env.fund(XRP(10000), minter, buyer, gw, broker);
+                env(fset(gw, asfDefaultRipple));
+                env.close();
+                env.trust(USD(1000), minter);
+                env.trust(EUR(1000), buyer);
+                env.close();
+                env(pay(gw, buyer, EUR(100)));
+                env.close();
+            };
+
+            {
+                // Use DeliverAmount for brokerFee
+                Env env{*this, features};
+                prepare(env);
+                auto const nftId = prepareNFT(env, minter, tfTransferable);
+                auto const sellOfferID =
+                    prepareSellOffer(env, nftId, minter, USD(90));
+                auto const buyOfferID =
+                    prepareBuyOffer(env, minter, nftId, buyer, EUR(100));
+
+                env(offer(gw, EUR(100), USD(100)));
+                env.close();
+
+                // broker has no trustline
+                env(token::brokerOffers(broker, buyOfferID, sellOfferID),
+                    token::brokerFee(USD(10)),
+                    ter(terNO_LINE));
+                env.close();
+
+                env.trust(USD(1000), broker);
+
+                BEAST_EXPECT(env.balance(minter, USD) == USD(0));
+                BEAST_EXPECT(env.balance(buyer, EUR) == EUR(100));
+                BEAST_EXPECT(env.balance(broker, USD) == USD(0));
+                env(token::brokerOffers(broker, buyOfferID, sellOfferID),
+                    token::brokerFee(USD(10)));
+                env.close();
+                BEAST_EXPECT(env.balance(minter, USD) == USD(90));
+                BEAST_EXPECT(env.balance(buyer, EUR) == EUR(0));
+                BEAST_EXPECT(env.balance(broker, USD) == USD(10));
+            }
+
+            {
+                // Use SendMax for brokerFee
+                Env env{*this, features};
+                prepare(env);
+                auto const nftId = prepareNFT(env, minter, tfTransferable);
+                auto const sellOfferID =
+                    prepareSellOffer(env, nftId, minter, USD(90));
+                auto const buyOfferID =
+                    prepareBuyOffer(env, minter, nftId, buyer, EUR(100));
+
+                env(offer(gw, EUR(100), USD(100)));
+                env.close();
+
+                // broker has no trustline
+                env(token::brokerOffers(broker, buyOfferID, sellOfferID),
+                    token::brokerFee(EUR(10)),
+                    ter(terNO_LINE));
+                env.close();
+
+                env.trust(EUR(1000), broker);
+
+                BEAST_EXPECT(env.balance(minter, USD) == USD(0));
+                BEAST_EXPECT(env.balance(buyer, EUR) == EUR(100));
+                BEAST_EXPECT(env.balance(broker, EUR) == EUR(0));
+                env(token::brokerOffers(broker, buyOfferID, sellOfferID),
+                    token::brokerFee(EUR(10)));
+                env.close();
+                BEAST_EXPECT(env.balance(minter, USD) == USD(90));
+                BEAST_EXPECT(env.balance(buyer, EUR) == EUR(0));
+                BEAST_EXPECT(env.balance(broker, EUR) == EUR(10));
+            }
+
+            {
+                // Use XRP for brokerFee
+                Env env{*this, features};
+                prepare(env);
+                auto const nftId = prepareNFT(env, minter, tfTransferable);
+                auto const sellOfferID =
+                    prepareSellOffer(env, nftId, minter, USD(90));
+                auto const buyOfferID =
+                    prepareBuyOffer(env, minter, nftId, buyer, EUR(100));
+
+                env(offer(gw, EUR(90), USD(90)));
+                env(offer(gw, EUR(10), XRP(10)));
+                env.close();
+
+                BEAST_EXPECT(env.balance(minter, USD) == USD(0));
+                BEAST_EXPECT(env.balance(buyer, EUR) == EUR(100));
+                BEAST_EXPECT(env.balance(broker) == XRP(10000));
+                env(token::brokerOffers(broker, buyOfferID, sellOfferID),
+                    token::brokerFee(XRP(10)));
+                env.close();
+                BEAST_EXPECT(env.balance(minter, USD) == USD(90));
+                BEAST_EXPECT(env.balance(buyer, EUR) == EUR(0));
+                auto const baseFee = env.current()->fees().base;
+                BEAST_EXPECT(env.balance(broker) + baseFee == XRP(10010));
+            }
         }
 
         {
