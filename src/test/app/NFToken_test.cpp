@@ -7326,11 +7326,33 @@ class NFTokenBaseUtil_test : public beast::unit_test::suite
             env.close();
             BEAST_EXPECT(env.balance(minter, USD) == USD(100));
             BEAST_EXPECT(env.balance(buyer, EUR) == EUR(0));
-            // TODO: check balance
         }
 
         {
             // Zero amount offer
+            Env env{*this, features};
+            env.fund(XRP(10000), minter, buyer, gw, broker);
+            env(fset(gw, asfDefaultRipple));
+            env.close();
+            env.trust(EUR(1000), buyer);
+            env.close();
+
+            env(pay(gw, buyer, EUR(100)));
+            env.close();
+
+            {
+                // accept sell offer
+                auto const nftId = prepareNFT(env, minter, tfTransferable);
+                auto const offerId =
+                    prepareSellOffer(env, nftId, minter, XRP(0));
+
+                env(token::acceptSellOffer(buyer, offerId),
+                    token::amount(EUR(100)),
+                    ter(temMALFORMED));
+            }
+            {
+                // cannot create buy offer with 0 amount
+            }
         }
 
         {
