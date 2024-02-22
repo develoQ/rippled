@@ -51,6 +51,13 @@ NFTokenAcceptOffer::preflight(PreflightContext const& ctx)
     if (!bo && !so)
         return temMALFORMED;
 
+    if (bo && so)
+    {
+        // sfAmount must not be used in brokered mode
+        if (ctx.tx.isFieldPresent(sfAmount))
+            return temMALFORMED;
+    }
+
     // The `BrokerFee` field must not be present in direct mode but may be
     // present and greater than zero in brokered mode.
     if (auto const bf = ctx.tx[~sfNFTokenBrokerFee])
@@ -93,6 +100,8 @@ NFTokenAcceptOffer::preclaim(PreclaimContext const& ctx)
         }
         return {nullptr, tesSUCCESS};
     };
+
+    auto const acceptAmount = ctx.tx[~sfAmount];
 
     auto const [bo, err1] = checkOffer(ctx.tx[~sfNFTokenBuyOffer]);
     if (!isTesSuccess(err1))
@@ -205,6 +214,11 @@ NFTokenAcceptOffer::preclaim(PreclaimContext const& ctx)
         // After this amendment, we allow an IOU issuer to buy an NFT with their
         // own currency
         auto const needed = bo->at(sfAmount);
+
+        // if NFTokenOffer amount is zero, the acceptAmount must not be present
+        if (needed == beast::zero && acceptAmount.has_value())
+            return temMALFORMED;
+
         if (ctx.view.rules().enabled(fixNonFungibleTokensV1_2))
         {
             if (accountFunds(
@@ -246,10 +260,15 @@ NFTokenAcceptOffer::preclaim(PreclaimContext const& ctx)
                 return tecNO_PERMISSION;
         }
 
+        auto const needed = so->at(sfAmount);
+
+        // if NFTokenOffer amount is zero, the acceptAmount must not be present
+        if (needed == beast::zero && acceptAmount.has_value())
+            return temMALFORMED;
+
         // The account offering to buy must have funds:
         if (!ctx.view.rules().enabled(fixNonFungibleTokensV1_2))
         {
-            auto const needed = so->at(sfAmount);
             if (accountHolds(
                     ctx.view,
                     ctx.tx[sfAccount],
@@ -292,15 +311,22 @@ PayResult
 NFTokenAcceptOffer::pay(
     AccountID const& from,
     AccountID const& to,
-    STAmount const& deliver_amount,
+    std::optional<STAmount> const& deliver_amount,
     std::optional<STAmount> const& send_max)
 {
+    auto getAmount = [&](std::optional<STAmount> const& first,
+                         std::optional<STAmount> const& second) {
+        return first.value_or(second.value_or(STAmount{XRPAmount(0)}));
+    };
+
     PayResult payResult;
-    payResult.actualAmountIn = deliver_amount;
-    payResult.actualAmountOut = send_max.value_or(deliver_amount);
+    payResult.actualAmountIn = getAmount(send_max, deliver_amount);
+    payResult.actualAmountOut = getAmount(deliver_amount, send_max);
 
     // This should never happen, but it's easy and quick to check.
-    if (deliver_amount < beast::zero)
+    if ((!deliver_amount && !send_max) ||
+        (deliver_amount.has_value() && *deliver_amount < beast::zero) ||
+        (send_max.has_value() && *send_max < beast::zero))
     {
         payResult.ter = tecINTERNAL;
         return payResult;
@@ -308,9 +334,10 @@ NFTokenAcceptOffer::pay(
 
     PaymentSandbox psb(&view());
     if (!view().rules().enabled(featureCrossCurrencyNFTokenAccept) ||
-        deliver_amount.issue() == send_max->issue())
+        !deliver_amount.has_value() || !send_max.has_value())
     {
-        auto const result = accountSend(psb, from, to, deliver_amount, j_);
+        auto amount = getAmount(deliver_amount, send_max);
+        auto const result = accountSend(psb, from, to, amount, j_);
         payResult.ter = result;
     }
     else
@@ -318,7 +345,7 @@ NFTokenAcceptOffer::pay(
         auto viewJ = ctx_.app.journal("View");
         auto const result = flow(
             psb,
-            deliver_amount,
+            *deliver_amount,
             from,
             to,
             STPathSet{},
@@ -340,29 +367,27 @@ NFTokenAcceptOffer::pay(
     // originally found in the context of IOU transfer fees. Since there are
     // several payouts in this tx, just confirm that the end state is OK.
     if (!psb.rules().enabled(fixNonFungibleTokensV1_2))
-    {
         return payResult;
-    }
     if (payResult.ter != tesSUCCESS)
-    {
         return payResult;
-    }
     if (accountFunds(
-            psb, from, send_max.value_or(deliver_amount), fhZERO_IF_FROZEN, j_)
+            psb,
+            from,
+            getAmount(send_max, deliver_amount),
+            fhZERO_IF_FROZEN,
+            j_)
             .signum() < 0)
     {
         payResult.ter = tecINSUFFICIENT_FUNDS;
         return payResult;
     }
-    if (accountFunds(psb, to, deliver_amount, fhZERO_IF_FROZEN, j_).signum() <
-        0)
+    if (accountFunds(
+            psb, to, getAmount(deliver_amount, send_max), fhZERO_IF_FROZEN, j_)
+            .signum() < 0)
     {
         payResult.ter = tecINSUFFICIENT_FUNDS;
         return payResult;
     }
-    payResult.ter = tesSUCCESS;
-    payResult.actualAmountIn = deliver_amount;
-    payResult.actualAmountOut = deliver_amount;
     psb.apply(ctx_.rawView());
     return payResult;
 }
@@ -440,7 +465,7 @@ NFTokenAcceptOffer::acceptOffer(
 
     auto sendMax = isSell ? acceptAmount.value_or(offerAmount) : offerAmount;
 
-    if (deliverAmount != beast::zero && sendMax != beast::zero)
+    if (offerAmount != beast::zero)
     {
         // Calculate the issuer's cut from this sale, if any:
         if (auto const fee = nft::getTransferFee(nftokenID); fee != 0)
@@ -454,7 +479,9 @@ NFTokenAcceptOffer::acceptOffer(
                 auto const r = pay(buyer, issuer, cut, sendMax);
                 if (!isTesSuccess(r.ter))
                     return r.ter;
-                sendMax -= r.actualAmountOut;
+
+                sendMax -= r.actualAmountIn;
+                deliverAmount -= r.actualAmountOut;
             }
         }
 
@@ -528,7 +555,7 @@ NFTokenAcceptOffer::doApply()
             if (!isTesSuccess(r.ter))
                 return r.ter;
 
-            buyerAmount -= r.actualAmountOut;
+            buyerAmount -= r.actualAmountIn;
         }
 
         // Calculate the issuer's cut, if any.
@@ -544,14 +571,14 @@ NFTokenAcceptOffer::doApply()
                 if (!isTesSuccess(r.ter))
                     return r.ter;
 
-                buyerAmount -= r.actualAmountOut;
+                buyerAmount -= r.actualAmountIn;
             }
         }
 
         // And send whatever remains to the seller.
         if (buyerAmount > beast::zero)
         {
-            if (auto const r = pay(buyer, seller, buyerAmount, sellerAmount);
+            if (auto const r = pay(buyer, seller, sellerAmount, buyerAmount);
                 !isTesSuccess(r.ter))
                 return r.ter;
         }

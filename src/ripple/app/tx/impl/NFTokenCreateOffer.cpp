@@ -123,8 +123,12 @@ NFTokenCreateOffer::preclaim(PreclaimContext const& ctx)
         if (!ctx.view.exists(keylet::account(issuer)))
             return tecNO_ISSUER;
 
-        if (!ctx.view.exists(keylet::line(issuer, amount.issue())))
-            return tecNO_LINE;
+        // If featureCrossCurrencyNFTokenAccept enabled, check amount trustline
+        // only buy offer
+        if (!ctx.view.rules().enabled(featureCrossCurrencyNFTokenAccept) ||
+            !isSellOffer)
+            if (!ctx.view.exists(keylet::line(issuer, amount.issue())))
+                return tecNO_LINE;
 
         if (isFrozen(
                 ctx.view, issuer, amount.getCurrency(), amount.getIssuer()))

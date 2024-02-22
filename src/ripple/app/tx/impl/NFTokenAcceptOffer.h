@@ -40,7 +40,7 @@ private:
     PayResult
     pay(AccountID const& from,
         AccountID const& to,
-        STAmount const& deliver_amount,
+        std::optional<STAmount> const& deliver_amount,
         std::optional<STAmount> const& send_max);
 
     TER
