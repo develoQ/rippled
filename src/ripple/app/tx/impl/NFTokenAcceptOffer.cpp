@@ -470,8 +470,8 @@ NFTokenAcceptOffer::acceptOffer(
         // Calculate the issuer's cut from this sale, if any:
         if (auto const fee = nft::getTransferFee(nftokenID); fee != 0)
         {
-            auto const cut =
-                multiply(deliverAmount, nft::transferFeeAsRate(fee));
+            // issuer receives a cut of the buyer's currency
+            auto const cut = multiply(sendMax, nft::transferFeeAsRate(fee));
 
             if (auto const issuer = nft::getIssuer(nftokenID);
                 cut != beast::zero && seller != issuer && buyer != issuer)
@@ -481,7 +481,6 @@ NFTokenAcceptOffer::acceptOffer(
                     return r.ter;
 
                 sendMax -= r.actualAmountIn;
-                deliverAmount -= r.actualAmountOut;
             }
         }
 
@@ -551,6 +550,7 @@ NFTokenAcceptOffer::doApply()
         if (auto const cut = ctx_.tx[~sfNFTokenBrokerFee];
             cut && cut.value() != beast::zero)
         {
+            // broker receives a cut of the NFTokenBrokerFee currency
             auto const r = pay(buyer, account_, cut.value(), buyerAmount);
             if (!isTesSuccess(r.ter))
                 return r.ter;
@@ -562,6 +562,7 @@ NFTokenAcceptOffer::doApply()
         if (auto const fee = nft::getTransferFee(nftokenID);
             buyerAmount != beast::zero && fee != 0)
         {
+            // issuer receives a cut of the buyer's currency
             auto cut = multiply(buyerAmount, nft::transferFeeAsRate(fee));
 
             if (auto const issuer = nft::getIssuer(nftokenID);
