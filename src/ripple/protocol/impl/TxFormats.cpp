@@ -368,6 +368,7 @@ TxFormats::TxFormats()
             {sfNFTokenBuyOffer, soeOPTIONAL},
             {sfNFTokenSellOffer, soeOPTIONAL},
             {sfNFTokenBrokerFee, soeOPTIONAL},
+            {sfAmount, soeOPTIONAL},
         },
         commonFields);
 

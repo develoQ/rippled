@@ -83,6 +83,20 @@ public:
     operator()(Env&, JTx& jtx) const;
 };
 
+class amount
+{
+private:
+    STAmount const amount_;
+
+public:
+    explicit amount(STAmount const amount) : amount_(amount)
+    {
+    }
+
+    void
+    operator()(Env&, JTx& jtx) const;
+};
+
 /** Get the next NFTokenID that will be issued. */
 uint256
 getNextID(
