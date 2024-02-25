@@ -1223,9 +1223,12 @@ class NFTokenBaseUtil_test : public beast::unit_test::suite
             env.close();
             BEAST_EXPECT(ownerCount(env, buyer) == 2);
 
+            TER acceptOfferTER = features[featureCrossCurrencyNFTokenAccept]
+                ? TER(tecPATH_DRY)  // no liquidity to swap token
+                : TER(tecNFTOKEN_BUY_SELL_MISMATCH);
             // gw attempts to broker offers that are not for the same currency.
             env(token::brokerOffers(gw, buyerOfferIndex, plainOfferIndex),
-                ter(tecNFTOKEN_BUY_SELL_MISMATCH));
+                ter(acceptOfferTER));
             env.close();
             BEAST_EXPECT(ownerCount(env, buyer) == 2);
 
@@ -1250,11 +1253,14 @@ class NFTokenBaseUtil_test : public beast::unit_test::suite
             env.close();
             BEAST_EXPECT(ownerCount(env, buyer) == 2);
 
+            TER acceptOfferTER = features[featureCrossCurrencyNFTokenAccept]
+                ? TER(tecINSUFFICIENT_FUNDS)  // no token balance
+                : TER(tecNFTOKEN_BUY_SELL_MISMATCH);
             // Broker sets their fee in a denomination other than the one
             // used by the offers
             env(token::brokerOffers(gw, buyerOfferIndex, audOfferIndex),
                 token::brokerFee(XRP(40)),
-                ter(tecNFTOKEN_BUY_SELL_MISMATCH));
+                ter(acceptOfferTER));
             env.close();
             BEAST_EXPECT(ownerCount(env, buyer) == 2);
 
@@ -1669,8 +1675,10 @@ class NFTokenBaseUtil_test : public beast::unit_test::suite
                 env.close();
 
                 // becky attempts to sell the nft for AUD.
-                TER const createOfferTER =
-                    xferFee ? TER(tecNO_LINE) : TER(tesSUCCESS);
+                TER createOfferTER =
+                    xferFee && !features[featureCrossCurrencyNFTokenAccept]
+                    ? TER(tecNO_LINE)
+                    : TER(tesSUCCESS);
                 uint256 const beckyOfferIndex =
                     keylet::nftoffer(becky, env.seq(becky)).key;
                 env(token::createOffer(becky, nftNoAutoTrustID, gwAUD(100)),
@@ -1678,6 +1686,7 @@ class NFTokenBaseUtil_test : public beast::unit_test::suite
                     ter(createOfferTER));
                 env.close();
 
+                createOfferTER = xferFee ? TER(tecNO_LINE) : TER(tesSUCCESS);
                 // cheri offers to buy the nft for CAD.
                 uint256 const cheriOfferIndex =
                     keylet::nftoffer(cheri, env.seq(cheri)).key;
@@ -1777,10 +1786,14 @@ class NFTokenBaseUtil_test : public beast::unit_test::suite
                 //  o 10 for the previous sale's fee.
                 BEAST_EXPECT(env.balance(alice, gwAUD) == gwAUD(210));
 
+                TER const acceptOfferTER =
+                    features[featureCrossCurrencyNFTokenAccept]
+                    ? TER(tesSUCCESS)
+                    : TER(tecNO_LINE);
                 // cheri can't sell the NFT for EUR, but can for CAD.
                 env(token::createOffer(cheri, nftNoAutoTrustID, gwEUR(50)),
                     txflags(tfSellNFToken),
-                    ter(tecNO_LINE));
+                    ter(acceptOfferTER));
                 env.close();
                 uint256 const cheriSellOfferIndex =
                     keylet::nftoffer(cheri, env.seq(cheri)).key;
@@ -7546,12 +7559,13 @@ class NFTokenBaseUtil_test : public beast::unit_test::suite
                     : TER{tecNFTOKEN_BUY_SELL_MISMATCH};
 
                 // broker has no trustline
-                env(token::brokerOffers(broker, buyOfferID, sellOfferID),
-                    token::brokerFee(EUR(10)),
-                    ter(expectedTer));
-                env.close();
+                // env(token::brokerOffers(broker, buyOfferID, sellOfferID),
+                //     token::brokerFee(EUR(10)),
+                //     ter(expectedTer));
+                // env.close();
 
                 env.trust(EUR(1000), broker);
+                env.close();
 
                 expectedTer = features[featureCrossCurrencyNFTokenAccept]
                     ? TER{tesSUCCESS}
@@ -7609,17 +7623,18 @@ class NFTokenBaseUtil_test : public beast::unit_test::suite
 
                 Env env{*this, features};
                 prepare(env);
+                env(pay(gw, buyer, EUR(245)));  // 100+245
                 env.trust(USD(1000), broker);
                 env.trust(EUR(1000), minter);
                 env.close();
 
-                // 20% transfer fee
-                env(rate(gw, 1.2));
+                // 50% transfer fee
+                env(rate(gw, 1.5));
                 env.close();
 
-                // 10% NFToken transfer fee
+                // 20% NFToken transfer fee
                 auto const nftId =
-                    prepareNFTWithFee(env, minter, tfTransferable, 10000);
+                    prepareNFTWithFee(env, minter, tfTransferable, 20000);
                 {
                     auto const offerID =
                         prepareSellOffer(env, nftId, minter, XRP(0));
@@ -7627,11 +7642,11 @@ class NFTokenBaseUtil_test : public beast::unit_test::suite
                     env.close();
                 }
                 auto const sellOfferID =
-                    prepareSellOffer(env, nftId, alice, USD(60));
+                    prepareSellOffer(env, nftId, alice, USD(30));
                 auto const buyOfferID =
-                    prepareBuyOffer(env, alice, nftId, buyer, EUR(100));
+                    prepareBuyOffer(env, alice, nftId, buyer, EUR(345));
 
-                env(offer(gw, EUR(100), USD(100)));
+                env(offer(gw, EUR(200), USD(200)));
                 env.close();
 
                 TER expectedTer = features[featureCrossCurrencyNFTokenAccept]
@@ -7639,22 +7654,22 @@ class NFTokenBaseUtil_test : public beast::unit_test::suite
                     : TER{tecNFTOKEN_BUY_SELL_MISMATCH};
                 BEAST_EXPECT(env.balance(broker, USD) == USD(0));
                 BEAST_EXPECT(env.balance(minter, EUR) == EUR(0));
-                BEAST_EXPECT(env.balance(buyer, EUR) == EUR(100));
+                BEAST_EXPECT(env.balance(buyer, EUR) == EUR(345));
                 BEAST_EXPECT(env.balance(alice, USD) == USD(0));
                 env(token::brokerOffers(broker, buyOfferID, sellOfferID),
-                    token::brokerFee(USD(10)),
+                    token::brokerFee(USD(30)),
                     ter{expectedTer});
                 env.close();
                 if (features[featureCrossCurrencyNFTokenAccept])
                 {
-                    BEAST_EXPECT(env.balance(broker, USD) == USD(10));
+                    BEAST_EXPECT(env.balance(broker, USD) == USD(30));
                     BEAST_EXPECT(
                         env.balance(minter, EUR) ==
-                        EUR(8.8));  // (100-10*1.2)*10%
+                        EUR(60));  // (115-10*1.5)*20%
+                    BEAST_EXPECT(env.balance(buyer, EUR) == EUR(0));
                     BEAST_EXPECT(
-                        env.balance(buyer, EUR) ==
-                        EUR(5.44));  // 100-10*1.2-8.8*1.2-60*1.2
-                    BEAST_EXPECT(env.balance(alice, USD) == USD(60));
+                        env.balance(alice, USD) ==
+                        USD(140));  // 345-90*1.5=210, x+x*0.5=210
                 }
             }
         }

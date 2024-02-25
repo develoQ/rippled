@@ -312,7 +312,8 @@ NFTokenAcceptOffer::pay(
     AccountID const& from,
     AccountID const& to,
     std::optional<STAmount> const& deliver_amount,
-    std::optional<STAmount> const& send_max)
+    std::optional<STAmount> const& send_max,
+    bool const& pay_all_send_max)
 {
     auto getAmount = [&](std::optional<STAmount> const& first,
                          std::optional<STAmount> const& second) {
@@ -331,35 +332,56 @@ NFTokenAcceptOffer::pay(
         payResult.ter = tecINTERNAL;
         return payResult;
     }
-
     PaymentSandbox psb(&view());
+
     if (!view().rules().enabled(featureCrossCurrencyNFTokenAccept) ||
-        !deliver_amount.has_value() || !send_max.has_value())
+        !deliver_amount.has_value() || !send_max.has_value() ||
+        deliver_amount->issue() == send_max->issue())
     {
-        auto amount = getAmount(deliver_amount, send_max);
+        auto amount = pay_all_send_max ? getAmount(send_max, deliver_amount)
+                                       : getAmount(deliver_amount, send_max);
         auto const result = accountSend(psb, from, to, amount, j_);
         payResult.ter = result;
+        payResult.actualAmountIn = amount;
+        payResult.actualAmountOut = amount;
     }
     else
     {
+        STAmount const flowDeliver{
+            pay_all_send_max ? deliver_amount->native()
+                    ? STAmount{STAmount::cMaxNative}
+                    : STAmount(
+                          deliver_amount->issue(),
+                          STAmount::cMaxValue / 2,
+                          STAmount::cMaxOffset)
+                             : *deliver_amount};
         auto viewJ = ctx_.app.journal("View");
+
         auto const result = flow(
             psb,
-            *deliver_amount,
+            flowDeliver,
             from,
             to,
             STPathSet{},
-            true,   // default path
-            false,  // partial payment
-            true,   // owner pays transfer fee
+            true,              // default path
+            pay_all_send_max,  // partial payment
+            true,              // owner pays transfer fee
             OfferCrossing::no,
             std::nullopt,
             send_max,
             viewJ);
+
         payResult.ter = result.result();
         payResult.actualAmountIn = result.actualAmountIn;
         payResult.actualAmountOut = result.actualAmountOut;
+
+        if (payResult.ter == tesSUCCESS && pay_all_send_max &&
+            result.actualAmountOut < *deliver_amount)
+        {
+            payResult.ter = tecPATH_PARTIAL;
+        }
     }
+    psb.apply(ctx_.rawView());
 
     // After this amendment, if any payment would cause a non-IOU-issuer to
     // have a negative balance, or an IOU-issuer to have a positive balance in
@@ -388,7 +410,6 @@ NFTokenAcceptOffer::pay(
         payResult.ter = tecINSUFFICIENT_FUNDS;
         return payResult;
     }
-    psb.apply(ctx_.rawView());
     return payResult;
 }
 
@@ -476,7 +497,7 @@ NFTokenAcceptOffer::acceptOffer(
             if (auto const issuer = nft::getIssuer(nftokenID);
                 cut != beast::zero && seller != issuer && buyer != issuer)
             {
-                auto const r = pay(buyer, issuer, cut, sendMax);
+                auto const r = pay(buyer, issuer, cut, sendMax, false);
                 if (!isTesSuccess(r.ter))
                     return r.ter;
 
@@ -485,7 +506,7 @@ NFTokenAcceptOffer::acceptOffer(
         }
 
         // Send the remaining funds to the seller of the NFT
-        if (auto const r = pay(buyer, seller, deliverAmount, sendMax);
+        if (auto const r = pay(buyer, seller, deliverAmount, sendMax, true);
             !isTesSuccess(r.ter))
             return r.ter;
     }
@@ -551,9 +572,13 @@ NFTokenAcceptOffer::doApply()
             cut && cut.value() != beast::zero)
         {
             // broker receives a cut of the NFTokenBrokerFee currency
-            auto const r = pay(buyer, account_, cut.value(), buyerAmount);
+            auto const r =
+                pay(buyer, account_, cut.value(), buyerAmount, false);
             if (!isTesSuccess(r.ter))
                 return r.ter;
+
+            if (buyerAmount.issue() != r.actualAmountIn.issue())
+                return tecINTERNAL;
 
             buyerAmount -= r.actualAmountIn;
         }
@@ -568,10 +593,12 @@ NFTokenAcceptOffer::doApply()
             if (auto const issuer = nft::getIssuer(nftokenID);
                 seller != issuer && buyer != issuer)
             {
-                auto const r = pay(buyer, issuer, cut, buyerAmount);
+                auto const r = pay(buyer, issuer, cut, buyerAmount, false);
                 if (!isTesSuccess(r.ter))
                     return r.ter;
 
+                if (buyerAmount.issue() != r.actualAmountIn.issue())
+                    return tecINTERNAL;
                 buyerAmount -= r.actualAmountIn;
             }
         }
@@ -579,8 +606,8 @@ NFTokenAcceptOffer::doApply()
         // And send whatever remains to the seller.
         if (buyerAmount > beast::zero)
         {
-            if (auto const r = pay(buyer, seller, sellerAmount, buyerAmount);
-                !isTesSuccess(r.ter))
+            auto const r = pay(buyer, seller, sellerAmount, buyerAmount, true);
+            if (!isTesSuccess(r.ter))
                 return r.ter;
         }
 

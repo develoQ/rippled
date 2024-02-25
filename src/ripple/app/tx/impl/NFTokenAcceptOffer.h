@@ -41,7 +41,8 @@ private:
     pay(AccountID const& from,
         AccountID const& to,
         std::optional<STAmount> const& deliver_amount,
-        std::optional<STAmount> const& send_max);
+        std::optional<STAmount> const& send_max,
+        bool const& pay_all_send_max);
 
     TER
     acceptOffer(
