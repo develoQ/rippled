@@ -806,6 +806,7 @@ if (tests)
     src/test/app/AMM_test.cpp
     src/test/app/AMMCalc_test.cpp
     src/test/app/AMMExtended_test.cpp
+    src/test/app/Charge_test.cpp
     src/test/app/Check_test.cpp
     src/test/app/Clawback_test.cpp
     src/test/app/CrossingLimits_test.cpp
@@ -965,6 +966,7 @@ if (tests)
     src/test/jtx/impl/amount.cpp
     src/test/jtx/impl/attester.cpp
     src/test/jtx/impl/balance.cpp
+    src/test/jtx/impl/charge.cpp
     src/test/jtx/impl/check.cpp
     src/test/jtx/impl/delivermin.cpp
     src/test/jtx/impl/deposit.cpp

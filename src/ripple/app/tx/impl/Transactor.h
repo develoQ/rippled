@@ -132,6 +132,9 @@ public:
     checkPriorTxAndLastLedger(PreclaimContext const& ctx);
 
     static TER
+    checkCharge(PreclaimContext const& ctx);
+
+    static TER
     checkFee(PreclaimContext const& ctx, XRPAmount baseFee);
 
     static NotTEC
@@ -192,6 +195,8 @@ private:
 
     TER
     consumeSeqProxy(SLE::pointer const& sleAccount);
+    TER
+    payCharge();
     TER
     payFee();
     static NotTEC

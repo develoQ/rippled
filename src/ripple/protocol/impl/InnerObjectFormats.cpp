@@ -147,6 +147,13 @@ InnerObjectFormats::InnerObjectFormats()
             {sfAssetPrice, soeOPTIONAL},
             {sfScale, soeDEFAULT},
         });
+
+    add(sfCharge.jsonName.c_str(),
+        sfCharge.getCode(),
+        {
+            {sfDestination, soeREQUIRED},
+            {sfAmount, soeREQUIRED},
+        });
 }
 
 InnerObjectFormats const&

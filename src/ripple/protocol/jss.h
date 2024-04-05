@@ -66,6 +66,7 @@ JSS(AuthAccount);          // in: AMM Auction Slot
 JSS(AuthAccounts);         // in: AMM Auction Slot
 JSS(BaseAsset);            // in: Oracle
 JSS(Bridge);               // ledger type.
+JSS(Charge);               // field.
 JSS(Check);                // ledger type.
 JSS(CheckCancel);          // transaction type.
 JSS(CheckCash);            // transaction type.
