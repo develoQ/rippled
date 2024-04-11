@@ -263,6 +263,11 @@ invoke_preclaim(PreclaimContext const& ctx)
                 if (result != tesSUCCESS)
                     return result;
 
+                result = T::checkCharge(ctx);
+
+                if (result != tesSUCCESS)
+                    return result;
+
                 result = T::checkSign(ctx);
 
                 if (result != tesSUCCESS)

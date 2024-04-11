@@ -19,6 +19,7 @@
 
 #include <ripple/app/main/Application.h>
 #include <ripple/app/misc/LoadFeeTrack.h>
+#include <ripple/app/paths/Flow.h>
 #include <ripple/app/tx/apply.h>
 #include <ripple/app/tx/impl/SignerEntries.h>
 #include <ripple/app/tx/impl/Transactor.h>
@@ -27,6 +28,7 @@
 #include <ripple/basics/contract.h>
 #include <ripple/core/Config.h>
 #include <ripple/json/to_string.h>
+#include <ripple/ledger/PaymentSandbox.h>
 #include <ripple/ledger/View.h>
 #include <ripple/protocol/Feature.h>
 #include <ripple/protocol/Indexes.h>
@@ -190,6 +192,159 @@ Transactor::minimumFee(
 }
 
 TER
+Transactor::checkCharge(PreclaimContext const& ctx)
+{
+    if (!ctx.tx.isFieldPresent(sfCharge))
+        return tesSUCCESS;
+
+    auto tx = ctx.tx;
+    auto charge = tx.peekFieldObject(sfCharge);
+    AccountID const from = ctx.tx.getAccountID(sfAccount);
+
+    if (!charge.isFieldPresent(sfDestination) ||
+        !charge.isFieldPresent(sfAmount))
+        return temMALFORMED;
+
+    AccountID const to = charge[sfDestination];
+    STAmount const amount = charge[sfAmount];
+
+    if (!isLegalNet(amount) || amount <= beast::zero)
+        return temBAD_AMOUNT;
+
+    if (from == to)
+        return temDST_IS_SRC;
+
+    auto const sleDst = ctx.view.read(keylet::account(to));
+
+    if (!sleDst)
+        return tecNO_DST;
+
+    if (auto const result = requireAuth(ctx.view, amount.issue(), to);
+        !isTesSuccess(result))
+        return result;
+
+    if (!amount.native())
+    {
+        if (to != amount.getIssuer())
+        {
+            if (!ctx.view.exists(keylet::line(to, amount.issue())))
+                return tecNO_LINE;
+        }
+        if (from != amount.getIssuer())
+        {
+            if (!ctx.view.exists(keylet::line(from, amount.issue())))
+                return tecNO_LINE;
+        }
+
+        if (to != amount.getIssuer() && from != amount.getIssuer())
+        {
+            if (isFrozen(ctx.view, from, amount.issue()) ||
+                isFrozen(ctx.view, to, amount.issue()))
+                return tecFROZEN;
+        }
+
+        if (from != amount.getIssuer())
+        {
+            Keylet const srcLine =
+                keylet::line(from, amount.getIssuer(), amount.getCurrency());
+            auto const sleSrcLine = ctx.view.read(srcLine);
+            STAmount srcBalance = from < amount.issue().account
+                ? (*sleSrcLine)[sfBalance]
+                : -(*sleSrcLine)[sfBalance];
+            // TODO: xferRate
+            if (srcBalance < amount)
+                return tecPATH_PARTIAL;
+        }
+
+        if (to != amount.getIssuer())
+        {
+            Keylet const dstLine =
+                keylet::line(to, amount.getIssuer(), amount.getCurrency());
+            auto const sleDstLine = ctx.view.read(dstLine);
+            STAmount dstLimit = to < amount.issue().account
+                ? (*sleDstLine)[sfLowLimit]
+                : (*sleDstLine)[sfHighLimit];
+            // TODO: xferRate
+            if (accountFunds(ctx.view, to, amount, fhZERO_IF_FROZEN, ctx.j) +
+                    amount >
+                dstLimit)
+                return tecPATH_PARTIAL;
+        }
+    }
+    else
+    {
+        if (accountFunds(ctx.view, from, amount, fhZERO_IF_FROZEN, ctx.j) <
+            amount)
+            return tecUNFUNDED_PAYMENT;
+    }
+
+    return tesSUCCESS;
+}
+
+TER
+Transactor::payCharge()
+{
+    if (!ctx_.tx.isFieldPresent(sfCharge))
+        return tesSUCCESS;
+
+    AccountID const from = account_;
+
+    auto tx = ctx_.tx;
+    auto charge = tx.peekFieldObject(sfCharge);
+    AccountID to = charge.getAccountID(sfDestination);
+    STAmount amount = charge.getFieldAmount(sfAmount);
+
+    PaymentSandbox psb(&view());
+
+    TER result;
+    if (amount.native())
+    {
+        result = accountSend(view(), from, to, amount, j_);
+    }
+    else
+    {
+        STAmount sendMax = amount;
+        STAmount deliverAmount = amount;
+
+        if (from != amount.getIssuer() && to != amount.getIssuer())
+        {
+            deliverAmount =
+                divide(amount, transferRate(view(), amount.getIssuer()));
+        }
+
+        auto const flowResult = flow(
+            psb,
+            deliverAmount,
+            from,
+            to,
+            STPathSet{},
+            /*default path*/ true,
+            /*partial payment*/ false,
+            /*owner pays transfer fee*/ true,
+            /*offer crossing*/ OfferCrossing::no,
+            /*limit quality*/ std::nullopt,
+            /*sendmax*/ sendMax,
+            j_);
+        result = flowResult.result();
+    }
+
+    if (!isTesSuccess(result))
+        return result;
+
+    if (accountFunds(view(), from, amount, fhZERO_IF_FROZEN, j_).signum() < 0)
+        return tecINSUFFICIENT_FUNDS;
+    if (accountFunds(view(), to, amount, fhZERO_IF_FROZEN, j_).signum() < 0)
+        return tecINSUFFICIENT_FUNDS;
+
+    if (amount.native())
+        mSourceBalance -= amount.xrp();
+
+    psb.apply(ctx_.rawView());
+
+    return result;
+}
+
+TER
 Transactor::checkFee(PreclaimContext const& ctx, XRPAmount baseFee)
 {
     if (!ctx.tx[sfFee].native())
@@ -226,9 +381,9 @@ Transactor::checkFee(PreclaimContext const& ctx, XRPAmount baseFee)
 
     if (balance < feePaid)
     {
-        JLOG(ctx.j.trace()) << "Insufficient balance:"
-                            << " balance=" << to_string(balance)
-                            << " paid=" << to_string(feePaid);
+        JLOG(ctx.j.trace())
+            << "Insufficient balance:" << " balance=" << to_string(balance)
+            << " paid=" << to_string(feePaid);
 
         if ((balance > beast::zero) && !ctx.view.open())
         {
@@ -461,6 +616,10 @@ Transactor::apply()
         mSourceBalance = mPriorBalance;
 
         TER result = consumeSeqProxy(sle);
+        if (result != tesSUCCESS)
+            return result;
+
+        result = payCharge();
         if (result != tesSUCCESS)
             return result;
 

@@ -637,6 +637,7 @@ extern SField const sfVoteEntry;
 extern SField const sfAuctionSlot;
 extern SField const sfAuthAccount;
 extern SField const sfPriceData;
+extern SField const sfCharge;
 
 extern SField const sfSigner;
 extern SField const sfMajority;
