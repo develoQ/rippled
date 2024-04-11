@@ -1,5 +1,4 @@
 var searchData=
 [
-  ['fees_28864',['Fees',['../md_ripple_app_misc_FeeEscalation.html',1,'']]],
-  ['fee_20voting_28865',['Fee Voting',['../md_ripple_app_misc_README.html',1,'']]]
+  ['environment_0',['environment',['../md____w_rippled_rippled_docs_build_environment.html',1,'']]]
 ];
