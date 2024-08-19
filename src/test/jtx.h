@@ -22,7 +22,6 @@
 
 // Convenience header that includes everything
 
-#include <ripple/json/to_string.h>
 #include <test/jtx/Account.h>
 #include <test/jtx/Env.h>
 #include <test/jtx/Env_ss.h>
@@ -41,6 +40,7 @@
 #include <test/jtx/invoice_id.h>
 #include <test/jtx/jtx_json.h>
 #include <test/jtx/last_ledger_sequence.h>
+#include <test/jtx/ledgerStateFix.h>
 #include <test/jtx/memo.h>
 #include <test/jtx/multisign.h>
 #include <test/jtx/noop.h>
@@ -54,6 +54,7 @@
 #include <test/jtx/regkey.h>
 #include <test/jtx/require.h>
 #include <test/jtx/requires.h>
+#include <test/jtx/rpc.h>
 #include <test/jtx/sendmax.h>
 #include <test/jtx/seq.h>
 #include <test/jtx/sig.h>
@@ -65,5 +66,6 @@
 #include <test/jtx/trust.h>
 #include <test/jtx/txflags.h>
 #include <test/jtx/utility.h>
+#include <xrpl/json/to_string.h>
 
 #endif

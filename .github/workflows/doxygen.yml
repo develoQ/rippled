@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - develop
+      - doxygen
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -13,11 +14,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    container:
-      image: docker://rippleci/rippled-ci-builder:2944b78d22db
+    container: rippleci/rippled-build-ubuntu:aaf5e3e
     steps:
       - name: checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: check environment
         run: |
           echo ${PATH} | tr ':' '\n'

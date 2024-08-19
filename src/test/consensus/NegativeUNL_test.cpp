@@ -17,15 +17,15 @@
 */
 //==============================================================================
 
-#include <ripple/app/consensus/RCLValidations.h>
-#include <ripple/app/ledger/Ledger.h>
-#include <ripple/app/misc/NegativeUNLVote.h>
-#include <ripple/app/misc/ValidatorList.h>
-#include <ripple/app/tx/apply.h>
-#include <ripple/basics/Log.h>
-#include <ripple/beast/unit_test.h>
-#include <ripple/ledger/View.h>
 #include <test/jtx.h>
+#include <xrpld/app/consensus/RCLValidations.h>
+#include <xrpld/app/ledger/Ledger.h>
+#include <xrpld/app/misc/NegativeUNLVote.h>
+#include <xrpld/app/misc/ValidatorList.h>
+#include <xrpld/app/tx/apply.h>
+#include <xrpld/ledger/View.h>
+#include <xrpl/basics/Log.h>
+#include <xrpl/beast/unit_test.h>
 
 namespace ripple {
 namespace test {
@@ -778,8 +778,10 @@ class NegativeUNLVoteInternal_test : public beast::unit_test::suite
         // one add, one remove
         auto txSet = std::make_shared<SHAMap>(
             SHAMapType::TRANSACTION, env.app().getNodeFamily());
-        PublicKey toDisableKey;
-        PublicKey toReEnableKey;
+        PublicKey toDisableKey(
+            derivePublicKey(KeyType::ed25519, randomSecretKey()));
+        PublicKey toReEnableKey(
+            derivePublicKey(KeyType::ed25519, randomSecretKey()));
         LedgerIndex seq(1234);
         BEAST_EXPECT(countTx(txSet) == 0);
         vote.addTx(seq, toDisableKey, NegativeUNLVote::ToDisable, txSet);

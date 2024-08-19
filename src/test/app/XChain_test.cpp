@@ -17,15 +17,15 @@
 */
 //==============================================================================
 
-#include <ripple/beast/unit_test/suite.hpp>
-#include <ripple/protocol/Feature.h>
-#include <ripple/protocol/Indexes.h>
-#include <ripple/protocol/Issue.h>
-#include <ripple/protocol/SField.h>
-#include <ripple/protocol/STXChainBridge.h>
-#include <ripple/protocol/Serializer.h>
-#include <ripple/protocol/TER.h>
-#include <ripple/protocol/XChainAttestations.h>
+#include <xrpl/beast/unit_test/suite.h>
+#include <xrpl/protocol/Feature.h>
+#include <xrpl/protocol/Indexes.h>
+#include <xrpl/protocol/Issue.h>
+#include <xrpl/protocol/SField.h>
+#include <xrpl/protocol/STXChainBridge.h>
+#include <xrpl/protocol/Serializer.h>
+#include <xrpl/protocol/TER.h>
+#include <xrpl/protocol/XChainAttestations.h>
 
 #include <test/jtx.h>
 #include <test/jtx/Env.h>
@@ -728,7 +728,7 @@ struct XChain_test : public beast::unit_test::suite,
         //   Locking chain is XRP,
         // - Issuing chain is XRP with issuing chain is the root account.
         // ---------------------------------------------------------------------
-        Account a, b;
+        Account a("a"), b("b");
         Issue ia, ib;
 
         std::tuple lcs{
@@ -5005,7 +5005,8 @@ public:
 
         // create 10 accounts + door funded on both chains, and store
         // in ChainStateTracker the initial amount of these accounts
-        Account doorXRPLocking, doorUSDLocking, doorUSDIssuing;
+        Account doorXRPLocking("doorXRPLocking"),
+            doorUSDLocking("doorUSDLocking"), doorUSDIssuing("doorUSDIssuing");
 
         constexpr size_t num_acct = 10;
         auto a = [&doorXRPLocking, &doorUSDLocking, &doorUSDIssuing]() {

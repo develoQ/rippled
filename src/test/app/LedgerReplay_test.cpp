@@ -17,19 +17,19 @@
 */
 //==============================================================================
 
-#include <ripple/app/ledger/BuildLedger.h>
-#include <ripple/app/ledger/LedgerMaster.h>
-#include <ripple/app/ledger/LedgerReplay.h>
-#include <ripple/app/ledger/LedgerReplayTask.h>
-#include <ripple/app/ledger/LedgerReplayer.h>
-#include <ripple/app/ledger/impl/LedgerDeltaAcquire.h>
-#include <ripple/app/ledger/impl/LedgerReplayMsgHandler.h>
-#include <ripple/app/ledger/impl/SkipListAcquire.h>
-#include <ripple/basics/Slice.h>
-#include <ripple/overlay/PeerSet.h>
-#include <ripple/overlay/impl/PeerImp.h>
 #include <test/jtx.h>
 #include <test/jtx/envconfig.h>
+#include <xrpld/app/ledger/BuildLedger.h>
+#include <xrpld/app/ledger/LedgerMaster.h>
+#include <xrpld/app/ledger/LedgerReplay.h>
+#include <xrpld/app/ledger/LedgerReplayTask.h>
+#include <xrpld/app/ledger/LedgerReplayer.h>
+#include <xrpld/app/ledger/detail/LedgerDeltaAcquire.h>
+#include <xrpld/app/ledger/detail/LedgerReplayMsgHandler.h>
+#include <xrpld/app/ledger/detail/SkipListAcquire.h>
+#include <xrpld/overlay/PeerSet.h>
+#include <xrpld/overlay/detail/PeerImp.h>
+#include <xrpl/basics/Slice.h>
 
 #include <chrono>
 #include <thread>
@@ -197,7 +197,9 @@ enum class PeerFeature {
 class TestPeer : public Peer
 {
 public:
-    TestPeer(bool enableLedgerReplay) : ledgerReplayEnabled_(enableLedgerReplay)
+    TestPeer(bool enableLedgerReplay)
+        : ledgerReplayEnabled_(enableLedgerReplay)
+        , nodePublicKey_(derivePublicKey(KeyType::ed25519, randomSecretKey()))
     {
     }
 
@@ -237,8 +239,7 @@ public:
     PublicKey const&
     getNodePublic() const override
     {
-        static PublicKey key{};
-        return key;
+        return nodePublicKey_;
     }
     Json::Value
     json() override
@@ -314,6 +315,7 @@ public:
     }
 
     bool ledgerReplayEnabled_;
+    PublicKey nodePublicKey_;
 };
 
 enum class PeerSetBehavior {
