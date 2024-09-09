@@ -376,7 +376,6 @@ run(int argc, char** argv)
         "quorum",
         po::value<std::size_t>(),
         "Override the minimum validation quorum.")(
-        "reportingReadOnly", "Run in read-only reporting mode")(
         "silent", "No output to the console after startup.")(
         "standalone,a", "Run with no peers.")("verbose,v", "Verbose logging.")
 
@@ -401,9 +400,6 @@ run(int argc, char** argv)
         po::value<std::string>(),
         "Trap a specific transaction during replay.")(
         "start", "Start from a fresh Ledger.")(
-        "startReporting",
-        po::value<std::string>(),
-        "Start reporting from a fresh Ledger.")(
         "vacuum", "VACUUM the transaction db.")(
         "valid", "Consider the initial ledger a valid network ledger.");
 
@@ -596,7 +592,7 @@ run(int argc, char** argv)
         try
         {
             auto setup = setup_DatabaseCon(*config);
-            if (!doVacuumDB(setup))
+            if (!doVacuumDB(setup, config->journal()))
                 return -1;
         }
         catch (std::exception const& e)
@@ -657,17 +653,6 @@ run(int argc, char** argv)
     if (vm.count("start"))
     {
         config->START_UP = Config::FRESH;
-    }
-
-    if (vm.count("startReporting"))
-    {
-        config->START_UP = Config::FRESH;
-        config->START_LEDGER = vm["startReporting"].as<std::string>();
-    }
-
-    if (vm.count("reportingReadOnly"))
-    {
-        config->setReportingReadOnly(true);
     }
 
     if (vm.count("import"))
