@@ -285,7 +285,7 @@ invoke_preclaim(PreclaimContext const& ctx)
     }
 }
 
-static XRPAmount
+XRPAmount
 invoke_calculateBaseFee(ReadView const& view, STTx const& tx)
 {
     try
