@@ -1342,9 +1342,9 @@ NetworkOPsImp::apply(std::unique_lock<std::mutex>& batchLock)
 
                     auto const result = app_.getTxQ().apply(
                         app_, view, e.transaction->getSTransaction(), flags, j);
-                    e.result = result.first;
-                    e.applied = result.second;
-                    changed = changed || result.second;
+                    e.result = result.ter;
+                    e.applied = result.applied;
+                    changed = changed || result.applied;
                 }
                 return changed;
             });
@@ -2781,24 +2781,6 @@ NetworkOPsImp::pubProposedTransaction(
     }
 
     pubProposedAccountTransaction(ledger, transaction, result);
-}
-
-static void
-getAccounts(Json::Value const& jvObj, std::vector<AccountID>& accounts)
-{
-    for (auto& jv : jvObj)
-    {
-        if (jv.isObject())
-        {
-            getAccounts(jv, accounts);
-        }
-        else if (jv.isString())
-        {
-            auto account = RPC::accountFromStringStrict(jv.asString());
-            if (account)
-                accounts.push_back(*account);
-        }
-    }
 }
 
 void
