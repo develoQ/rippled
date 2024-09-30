@@ -23,36 +23,74 @@
 #include <xrpld/app/tx/detail/Transactor.h>
 #include <xrpld/rpc/Context.h>
 #include <xrpld/rpc/GRPCHandlers.h>
+#include <xrpld/rpc/detail/TransactionSign.h>
 #include <xrpl/basics/FeeUnits.h>
 #include <xrpl/basics/mulDiv.h>
 #include <xrpl/protocol/ErrorCodes.h>
 #include <xrpl/protocol/Feature.h>
+#include <xrpl/protocol/RPCErr.h>
 
 namespace ripple {
+
 inline std::optional<XRPAmount>
 getTxnFees(RPC::JsonContext const& context)
 {
     auto const& params(context.params);
+    Json::Value tx_json;  // the tx as a JSON
     if (params.isMember(jss::tx_blob))
     {
-        auto ret = strUnHex(context.params[jss::tx_blob].asString());
+        if (params.isMember(jss::tx_json))
+        {
+            // both `tx_blob` and `tx_json` included
+            return std::nullopt;
+        }
 
-        if (!ret || !ret->size())
-            throw std::invalid_argument("Invalid tx_blob");
+        auto const blob = context.params[jss::tx_blob];
+        if (!blob.isString())
+        {
+            return std::nullopt;
+        }
+        auto unHexed = strUnHex(blob.asString());
 
-        SerialIter sitTrans(makeSlice(*ret));
+        if (!unHexed || !unHexed->size())
+            return std::nullopt;
 
-        std::unique_ptr<STTx const> stpTrans;
-        stpTrans = std::make_unique<STTx const>(std::ref(sitTrans));
-
-        if (!stpTrans->isFieldPresent(sfAccount))
-            throw std::invalid_argument("No sfAccount specified");
-
-        return invoke_calculateBaseFee(
-            *(context.app.openLedger().current()), *stpTrans);
+        try
+        {
+            SerialIter sitTrans(makeSlice(*unHexed));
+            tx_json = STObject(std::ref(sitTrans), sfGeneric)
+                          .getJson(JsonOptions::none);
+        }
+        catch (std::runtime_error& e)
+        {
+            return std::nullopt;
+        }
+    }
+    else if (params.isMember(jss::tx_json))
+    {
+        tx_json = params[jss::tx_json];
+        if (!tx_json.isObject())
+        {
+            return std::nullopt;
+        }
+    }
+    else
+    {
+        // neither `tx_blob` nor `tx_json` included
+        return std::nullopt;
     }
 
-    return std::nullopt;
+    // basic sanity checks for transaction shape
+    if (!tx_json.isMember(jss::TransactionType))
+    {
+        return std::nullopt;
+    }
+    if (!tx_json.isMember(jss::Account))
+    {
+        return std::nullopt;
+    }
+
+    return RPC::getBaseFee(context.app, context.app.config(), tx_json);
 }
 
 Json::Value

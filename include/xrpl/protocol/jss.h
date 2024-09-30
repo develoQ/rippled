@@ -72,6 +72,7 @@ JSS(CheckCash);            // transaction type.
 JSS(CheckCreate);          // transaction type.
 JSS(Clawback);             // transaction type.
 JSS(ClearFlag);            // field.
+JSS(Condition);            // in: Escrow
 JSS(DID);                  // ledger type.
 JSS(DIDDelete);            // transaction type.
 JSS(DIDSet);               // transaction type.
@@ -89,6 +90,7 @@ JSS(EscrowFinish);         // transaction type.
 JSS(Fee);                  // in/out: TransactionSign; field.
 JSS(FeeSettings);          // ledger type.
 JSS(Flags);                // in/out: TransactionSign; field.
+JSS(Fulfillment);          // in: Escrow
 JSS(Invalid);              //
 JSS(LastLedgerSequence);   // in: TransactionSign; field
 JSS(LastUpdateTime);       // field.

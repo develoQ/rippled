@@ -36,6 +36,9 @@ class TxQ;
 
 namespace RPC {
 
+XRPAmount
+getBaseFee(Application const& app, Config const& config, Json::Value tx);
+
 Json::Value
 getCurrentFee(
     Role const role,
