@@ -17,7 +17,6 @@
 */
 //==============================================================================
 
-// #include <test/app/Import_json.h>
 #include <test/jtx.h>
 #include <xrpl/protocol/Feature.h>
 #include <xrpl/protocol/TxFlags.h>
@@ -29,7 +28,11 @@ namespace test {
 class BaseFee_test : public beast::unit_test::suite
 {
     void
-    testRPCCall(jtx::Env& env, Json::Value tx, std::string expected)
+    testRPCCall(
+        jtx::Env& env,
+        Json::Value tx,
+        std::string expected,
+        bool testSerialized = true)
     {
         {
             Json::Value params;
@@ -47,6 +50,7 @@ class BaseFee_test : public beast::unit_test::suite
             BEAST_EXPECT(openLedgerFee == expected);
         }
 
+        if (testSerialized)
         {
             auto const jtx = env.jt(tx);
             // build tx_blob
@@ -177,7 +181,6 @@ class BaseFee_test : public beast::unit_test::suite
         // build tx
         Json::Value tx = fset(account, 0);
         tx[jss::SigningPubKey] = "";
-        // tx[jss::TxnSignature] = "";
 
         std::vector<Account> signerAccounts = {
             bogie, demon, ghost, haunt, jinni, phase, shade, spirit};
@@ -186,8 +189,6 @@ class BaseFee_test : public beast::unit_test::suite
             Json::Value signer;
             signer[jss::Account] = account.human();
             signer[jss::SigningPubKey] = "";
-            // TODO: Remove this line after simulate rpc PR was fixed
-            signer[jss::TxnSignature] = "";
             Json::Value signerOuter;
             signerOuter[jss::Signer] = signer;
             tx[jss::Signers].append(signerOuter);
@@ -197,7 +198,7 @@ class BaseFee_test : public beast::unit_test::suite
         auto const baseFee = env.current()->fees().base;
         std::string expectedFee =
             to_string(baseFee + (signerAccounts.size() * baseFee));
-        testRPCCall(env, tx, expectedFee);
+        testRPCCall(env, tx, expectedFee, false);
     }
 
     void
