@@ -58,7 +58,7 @@ to_string(TableType type)
         case TableType::AccountTransactions:
             return "AccountTransactions";
         default:
-            assert(false);
+            UNREACHABLE("ripple::detail::to_string : invalid TableType");
             return "Unknown";
     }
 }
@@ -67,11 +67,12 @@ DatabasePairValid
 makeLedgerDBs(
     Config const& config,
     DatabaseCon::Setup const& setup,
-    DatabaseCon::CheckpointerSetup const& checkpointerSetup)
+    DatabaseCon::CheckpointerSetup const& checkpointerSetup,
+    beast::Journal j)
 {
     // ledger database
     auto lgr{std::make_unique<DatabaseCon>(
-        setup, LgrDBName, LgrDBPragma, LgrDBInit, checkpointerSetup)};
+        setup, LgrDBName, setup.lgrPragma, LgrDBInit, checkpointerSetup, j)};
     lgr->getSession() << boost::str(
         boost::format("PRAGMA cache_size=-%d;") %
         kilobytes(config.getValueFor(SizedItem::lgrDBCache)));
@@ -80,7 +81,7 @@ makeLedgerDBs(
     {
         // transaction database
         auto tx{std::make_unique<DatabaseCon>(
-            setup, TxDBName, TxDBPragma, TxDBInit, checkpointerSetup)};
+            setup, TxDBName, setup.txPragma, TxDBInit, checkpointerSetup, j)};
         tx->getSession() << boost::str(
             boost::format("PRAGMA cache_size=-%d;") %
             kilobytes(config.getValueFor(SizedItem::txnDBCache)));
@@ -201,7 +202,7 @@ saveValidatedLedger(
     if (!ledger->info().accountHash.isNonZero())
     {
         JLOG(j.fatal()) << "AH is zero: " << getJson({*ledger, {}});
-        assert(false);
+        UNREACHABLE("ripple::detail::saveValidatedLedger : zero account hash");
     }
 
     if (ledger->info().accountHash != ledger->stateMap().getHash().as_uint256())
@@ -210,10 +211,13 @@ saveValidatedLedger(
                         << " != " << ledger->stateMap().getHash();
         JLOG(j.fatal()) << "saveAcceptedLedger: seq=" << seq
                         << ", current=" << current;
-        assert(false);
+        UNREACHABLE(
+            "ripple::detail::saveValidatedLedger : mismatched account hash");
     }
 
-    assert(ledger->info().txHash == ledger->txMap().getHash().as_uint256());
+    XRPL_ASSERT(
+        ledger->info().txHash == ledger->txMap().getHash().as_uint256(),
+        "ripple::detail::saveValidatedLedger : transaction hash match");
 
     // Save the ledger header in the hashed object store
     {

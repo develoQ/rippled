@@ -4,9 +4,6 @@ Loop: test.jtx test.toplevel
 Loop: test.jtx test.unit_test
   test.unit_test == test.jtx
 
-Loop: xrpl.basics xrpl.json
-  xrpl.json ~= xrpl.basics
-
 Loop: xrpld.app xrpld.core
   xrpld.app > xrpld.core
 
@@ -32,7 +29,7 @@ Loop: xrpld.core xrpld.net
   xrpld.net > xrpld.core
 
 Loop: xrpld.core xrpld.perflog
-  xrpld.perflog ~= xrpld.core
+  xrpld.perflog == xrpld.core
 
 Loop: xrpld.net xrpld.rpc
   xrpld.rpc ~= xrpld.net

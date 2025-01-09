@@ -447,8 +447,8 @@ GRPCServerImpl::handleRpcs()
 
         if (!ok)
         {
-            JLOG(journal_.debug()) << "Request listener cancelled. "
-                                   << "Destroying object";
+            JLOG(journal_.debug())
+                << "Request listener cancelled. " << "Destroying object";
             erase(ptr);
         }
         else
@@ -606,7 +606,7 @@ GRPCServer::stop()
 
 GRPCServer::~GRPCServer()
 {
-    assert(!running_);
+    XRPL_ASSERT(!running_, "ripple::GRPCServer::~GRPCServer : is not running");
 }
 
 }  // namespace ripple

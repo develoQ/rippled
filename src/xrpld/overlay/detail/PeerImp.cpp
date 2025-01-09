@@ -32,11 +32,13 @@
 #include <xrpld/overlay/detail/PeerImp.h>
 #include <xrpld/overlay/detail/Tuning.h>
 #include <xrpld/overlay/predicates.h>
+#include <xrpld/perflog/PerfLog.h>
 #include <xrpl/basics/UptimeClock.h>
 #include <xrpl/basics/base64.h>
 #include <xrpl/basics/random.h>
 #include <xrpl/basics/safe_cast.h>
 #include <xrpl/beast/core/LexicalCast.h>
+// #include <xrpl/beast/core/SemanticVersion.h>
 #include <xrpl/protocol/digest.h>
 
 #include <boost/algorithm/string/predicate.hpp>
@@ -563,7 +565,9 @@ PeerImp::hasRange(std::uint32_t uMin, std::uint32_t uMax)
 void
 PeerImp::close()
 {
-    assert(strand_.running_in_this_thread());
+    XRPL_ASSERT(
+        strand_.running_in_this_thread(),
+        "ripple::PeerImp::close : strand in this thread");
     if (socket_.is_open())
     {
         detaching_ = true;  // DEPRECATED
@@ -589,7 +593,7 @@ PeerImp::fail(std::string const& reason)
         return post(
             strand_,
             std::bind(
-                (void (Peer::*)(std::string const&)) & PeerImp::fail,
+                (void(Peer::*)(std::string const&)) & PeerImp::fail,
                 shared_from_this(),
                 reason));
     if (journal_.active(beast::severities::kWarning) && socket_.is_open())
@@ -604,7 +608,9 @@ PeerImp::fail(std::string const& reason)
 void
 PeerImp::fail(std::string const& name, error_code ec)
 {
-    assert(strand_.running_in_this_thread());
+    XRPL_ASSERT(
+        strand_.running_in_this_thread(),
+        "ripple::PeerImp::fail : strand in this thread");
     if (socket_.is_open())
     {
         JLOG(journal_.warn())
@@ -617,9 +623,14 @@ PeerImp::fail(std::string const& name, error_code ec)
 void
 PeerImp::gracefulClose()
 {
-    assert(strand_.running_in_this_thread());
-    assert(socket_.is_open());
-    assert(!gracefulClose_);
+    XRPL_ASSERT(
+        strand_.running_in_this_thread(),
+        "ripple::PeerImp::gracefulClose : strand in this thread");
+    XRPL_ASSERT(
+        socket_.is_open(), "ripple::PeerImp::gracefulClose : socket is open");
+    XRPL_ASSERT(
+        !gracefulClose_,
+        "ripple::PeerImp::gracefulClose : socket is not closing");
     gracefulClose_ = true;
     if (send_queue_.size() > 0)
         return;
@@ -745,7 +756,9 @@ PeerImp::onShutdown(error_code ec)
 void
 PeerImp::doAccept()
 {
-    assert(read_buffer_.size() == 0);
+    XRPL_ASSERT(
+        read_buffer_.size() == 0,
+        "ripple::PeerImp::doAccept : empty read buffer");
 
     JLOG(journal_.debug()) << "doAccept: " << remote_address_;
 
@@ -894,8 +907,16 @@ PeerImp::onReadMessage(error_code ec, std::size_t bytes_transferred)
     while (read_buffer_.size() > 0)
     {
         std::size_t bytes_consumed;
-        std::tie(bytes_consumed, ec) =
-            invokeProtocolMessage(read_buffer_.data(), *this, hint);
+
+        using namespace std::chrono_literals;
+        std::tie(bytes_consumed, ec) = perf::measureDurationAndLog(
+            [&]() {
+                return invokeProtocolMessage(read_buffer_.data(), *this, hint);
+            },
+            "invokeProtocolMessage",
+            350ms,
+            journal_);
+
         if (ec)
             return fail("onReadMessage", ec);
         if (!socket_.is_open())
@@ -938,7 +959,9 @@ PeerImp::onWriteMessage(error_code ec, std::size_t bytes_transferred)
 
     metrics_.sent.add_message(bytes_transferred);
 
-    assert(!send_queue_.empty());
+    XRPL_ASSERT(
+        !send_queue_.empty(),
+        "ripple::PeerImp::onWriteMessage : non-empty send buffer");
     send_queue_.pop();
     if (!send_queue_.empty())
     {
@@ -1216,8 +1239,8 @@ PeerImp::handleTransaction(
     {
         // If we've never been in synch, there's nothing we can do
         // with a transaction
-        JLOG(p_journal_.debug()) << "Ignoring incoming transaction: "
-                                 << "Need network ledger";
+        JLOG(p_journal_.debug())
+            << "Ignoring incoming transaction: " << "Need network ledger";
         return;
     }
 
@@ -1992,13 +2015,18 @@ PeerImp::onValidatorListMessage(
         case ListDisposition::pending: {
             std::lock_guard<std::mutex> sl(recentLock_);
 
-            assert(applyResult.publisherKey);
+            XRPL_ASSERT(
+                applyResult.publisherKey,
+                "ripple::PeerImp::onValidatorListMessage : publisher key is "
+                "set");
             auto const& pubKey = *applyResult.publisherKey;
 #ifndef NDEBUG
             if (auto const iter = publisherListSequences_.find(pubKey);
                 iter != publisherListSequences_.end())
             {
-                assert(iter->second < applyResult.sequence);
+                XRPL_ASSERT(
+                    iter->second < applyResult.sequence,
+                    "ripple::PeerImp::onValidatorListMessage : lower sequence");
             }
 #endif
             publisherListSequences_[pubKey] = applyResult.sequence;
@@ -2009,10 +2037,14 @@ PeerImp::onValidatorListMessage(
 #ifndef NDEBUG
         {
             std::lock_guard<std::mutex> sl(recentLock_);
-            assert(applyResult.sequence && applyResult.publisherKey);
-            assert(
+            XRPL_ASSERT(
+                applyResult.sequence && applyResult.publisherKey,
+                "ripple::PeerImp::onValidatorListMessage : nonzero sequence "
+                "and set publisher key");
+            XRPL_ASSERT(
                 publisherListSequences_[*applyResult.publisherKey] <=
-                applyResult.sequence);
+                    applyResult.sequence,
+                "ripple::PeerImp::onValidatorListMessage : maximum sequence");
         }
 #endif  // !NDEBUG
 
@@ -2023,7 +2055,9 @@ PeerImp::onValidatorListMessage(
         case ListDisposition::unsupported_version:
             break;
         default:
-            assert(false);
+            UNREACHABLE(
+                "ripple::PeerImp::onValidatorListMessage : invalid best list "
+                "disposition");
     }
 
     // Charge based on the worst result
@@ -2062,7 +2096,9 @@ PeerImp::onValidatorListMessage(
             fee_ = Resource::feeBadData;
             break;
         default:
-            assert(false);
+            UNREACHABLE(
+                "ripple::PeerImp::onValidatorListMessage : invalid worst list "
+                "disposition");
     }
 
     // Log based on all the results.
@@ -2120,7 +2156,9 @@ PeerImp::onValidatorListMessage(
                     << "(s) from peer " << remote_address_;
                 break;
             default:
-                assert(false);
+                UNREACHABLE(
+                    "ripple::PeerImp::onValidatorListMessage : invalid list "
+                    "disposition");
         }
     }
 }
@@ -2795,7 +2833,7 @@ PeerImp::checkPropose(
     JLOG(p_journal_.trace())
         << "Checking " << (isTrusted ? "trusted" : "UNTRUSTED") << " proposal";
 
-    assert(packet);
+    XRPL_ASSERT(packet, "ripple::PeerImp::checkPropose : non-null packet");
 
     if (!cluster() && !peerPos.checkSign())
     {
